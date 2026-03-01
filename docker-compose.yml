@@ -1,0 +1,54 @@
+services:
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: ourhangout-api
+    env_file:
+      - .env
+    ports:
+      - "${PORT:-3000}:3000"
+    depends_on:
+      - postgres
+      - redis
+    restart: unless-stopped
+    command: sh -c "node dist/scripts/migrate.js && node dist/server.js"
+    volumes:
+      - ./logs:/app/logs
+
+  postgres:
+    image: postgres:16-alpine
+    container_name: ourhangout-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-ourhangout}
+      POSTGRES_USER: ${POSTGRES_USER:-ourhangout}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-ourhangout_dev_pw}
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-ourhangout} -d ${POSTGRES_DB:-ourhangout}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  redis:
+    image: redis:7-alpine
+    container_name: ourhangout-redis
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+    command: redis-server --appendonly yes
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+volumes:
+  postgres_data:
+  redis_data:
