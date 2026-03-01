@@ -27,6 +27,11 @@ type ChatMessageRow = {
   delivered_at: Date | null;
 };
 
+type BotUserRow = {
+  id: string;
+  bot_key: string;
+};
+
 type ChatServiceDeps = {
   db: Pool;
   eventBus: RedisChatEventBus;
@@ -62,6 +67,19 @@ export class ChatService {
 
     const [userAId, userBId] = [userId, peerUserId].sort();
     const pairKey = `${userAId}:${userBId}`;
+
+    const hasBotParticipant = await this.hasActiveBotParticipant(userAId, userBId);
+
+    if (!hasBotParticipant) {
+      await this.db.query(
+        `INSERT INTO user_relationships (pair_key, user_a_id, user_b_id, relationship_type, status, created_via, created_by)
+         VALUES ($1, $2, $3, 'friend', 'active', 'manual', $4)
+         ON CONFLICT (pair_key, relationship_type)
+         DO UPDATE SET
+           status = 'active'`,
+        [pairKey, userAId, userBId, userId]
+      );
+    }
 
     const roomResult = await this.db.query<ChatRoomRow>(
       `INSERT INTO chat_rooms (pair_key, user_a_id, user_b_id)
@@ -151,6 +169,7 @@ export class ChatService {
   async sendMessage(params: { roomId: string; senderId: string; content: string }): Promise<ChatMessage> {
     const room = await this.assertRoomMembership(params.roomId, params.senderId);
     const recipientId = room.user_a_id === params.senderId ? room.user_b_id : room.user_a_id;
+    const recipientBot = await this.findActiveBotByUserId(recipientId);
 
     const insertResult = await this.db.query<ChatMessageRow>(
       `INSERT INTO messages (room_id, sender_id, recipient_id, content, direction, ack_status)
@@ -162,16 +181,20 @@ export class ChatService {
     const message = this.mapMessage(insertResult.rows[0]);
     await this.publishNewMessage(message, [params.senderId, recipientId]);
 
-    void this.forwardToClaw(message).catch((error) => {
-      this.logger.error(
-        {
-          error,
-          messageId: message.id,
-          provider: this.clawBridge.getProviderName()
-        },
-        'Failed to forward outbound message to OpenClaw bridge'
-      );
-    });
+    if (recipientBot) {
+      await this.ackMessageByRecipient(message.id, recipientId);
+      void this.forwardToClaw(message, recipientBot.bot_key).catch((error) => {
+        this.logger.error(
+          {
+            error,
+            messageId: message.id,
+            botKey: recipientBot.bot_key,
+            provider: this.clawBridge.getProviderName()
+          },
+          'Failed to forward bot-targeted outbound message to OpenClaw bridge'
+        );
+      });
+    }
 
     return message;
   }
@@ -222,12 +245,13 @@ export class ChatService {
     }
   }
 
-  private async forwardToClaw(message: ChatMessage): Promise<void> {
+  private async forwardToClaw(message: ChatMessage, botKey?: string): Promise<void> {
     const response = await this.clawBridge.forwardMessage({
       messageId: message.id,
       roomId: message.roomId,
       senderId: message.senderId,
       recipientId: message.recipientId,
+      botKey,
       content: message.content
     });
 
@@ -244,6 +268,33 @@ export class ChatService {
 
     const inbound = this.mapMessage(inboundInsert.rows[0]);
     await this.publishNewMessage(inbound, [inbound.senderId, inbound.recipientId]);
+  }
+
+  private async findActiveBotByUserId(userId: string): Promise<BotUserRow | null> {
+    const result = await this.db.query<BotUserRow>(
+      `SELECT id, bot_key
+       FROM bots
+       WHERE user_id = $1
+         AND is_active = TRUE
+       LIMIT 1`,
+      [userId]
+    );
+
+    return result.rows[0] ?? null;
+  }
+
+  private async hasActiveBotParticipant(userAId: string, userBId: string): Promise<boolean> {
+    const result = await this.db.query<{ exists: boolean }>(
+      `SELECT EXISTS(
+        SELECT 1
+        FROM bots
+        WHERE is_active = TRUE
+          AND user_id IN ($1, $2)
+      )`,
+      [userAId, userBId]
+    );
+
+    return result.rows[0]?.exists ?? false;
   }
 
   private async assertRoomMembership(roomId: string, userId: string): Promise<ChatRoomRow> {

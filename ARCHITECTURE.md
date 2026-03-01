@@ -6,7 +6,7 @@
   - REST API (Fastify routes)
   - WebSocket endpoint (`/v1/ws`)
 - **Application Layer**
-  - `AuthService`, `PairingService`, `ChatService`, `ClawBridgeService`
+  - `AuthService`, `PairingService`, `ContactsService`, `BotService`, `ChatService`, `ClawBridgeService`
 - **Adapter Layer**
   - `ClawProvider` interface
   - `MockClawProvider`
@@ -25,6 +25,16 @@
 3. Backend issues access token + refresh token
 4. Refresh token hash stored in PostgreSQL
 
+### A-2. Contact matching
+
+1. App hashes contact identifiers on-device (`sha256(lowercase(email))`)
+2. App -> `POST /v1/contacts/sync`
+3. Backend stores only hashes (`contact_hashes` table)
+4. App -> `GET /v1/contacts/matches`
+5. Backend returns matched registered users (email-hash match)
+
+Phone-hash match is also supported when target users set `phone_e164`.
+
 ### B. Chat send
 
 1. App -> `POST /v1/chats/rooms/:roomId/messages`
@@ -32,14 +42,16 @@
 3. Backend publishes Redis event
 4. Subscribed backend instance pushes to recipient socket
 5. On socket delivery success, backend updates ACK to `delivered`
+6. If room peer is an in-app bot user, backend forwards message to OpenClaw bridge
 
 ### C. OpenClaw bridge route
 
-1. App message persisted by backend
-2. Backend calls `ClawBridgeService.forwardMessage(...)`
-3. Selected provider (`mock` or `http`) handles transport
-4. Provider response (if `replyText`) is persisted as inbound message
-5. Backend publishes/pushes inbound event via Redis + WebSocket
+1. User calls `GET /v1/bots` and `POST /v1/bots/:botId/rooms`
+2. Bot room is backed by a dedicated bot user account (`bots.user_id`)
+3. User message in bot room is persisted, ACKed, then bridged via `ClawBridgeService.forwardMessage(...)`
+4. Selected provider (`mock` or `http`) handles transport
+5. Provider response (if `replyText`) is persisted as inbound bot message
+6. Backend publishes/pushes inbound event via Redis + WebSocket
 
 ## 3) Security points
 
@@ -71,11 +83,14 @@ Future extensions:
 - `users`
 - `refresh_tokens`
 - `pairing_codes`
+- `user_relationships`
 - `chat_rooms`
 - `messages`
+- `bots`
+- `contact_hashes`
 - `schema_migrations`
 
-Migration file: `db/migrations/001_init.sql`
+Migration files: `db/migrations/*.sql`
 
 ## 6) Observability
 
@@ -105,6 +120,9 @@ Main codes:
 - `AUTH_UNAUTHORIZED`
 - `AUTH_INVALID_CREDENTIALS`
 - `AUTH_REFRESH_INVALID`
+- `AUTH_PROVIDER_MISMATCH`
+- `AUTH_GOOGLE_INVALID`
+- `AUTH_GOOGLE_CONFIG`
 - `VALIDATION_ERROR`
 - `FORBIDDEN`
 - `RESOURCE_NOT_FOUND`

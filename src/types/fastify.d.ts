@@ -7,6 +7,8 @@ import type { ClawBridgeService } from '../modules/openclaw/claw-bridge.service'
 import type { ChatService } from '../modules/chat/chat.service';
 import type { AuthService } from '../modules/auth/auth.service';
 import type { PairingService } from '../modules/pairing/pairing.service';
+import type { ContactsService } from '../modules/contacts/contacts.service';
+import type { BotService } from '../modules/bots/bot.service';
 import type { JwtUserPayload } from '../modules/auth/auth.types';
 
 declare module 'fastify' {
@@ -21,6 +23,8 @@ declare module 'fastify' {
     chatService: ChatService;
     authService: AuthService;
     pairingService: PairingService;
+    contactsService: ContactsService;
+    botService: BotService;
     authenticate: (request: FastifyRequest, reply: FastifyReply) => Promise<void>;
   }
 }

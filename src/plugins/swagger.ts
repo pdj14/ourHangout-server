@@ -12,7 +12,9 @@ export const swaggerPlugin = fp(async (app) => {
       },
       tags: [
         { name: 'auth', description: 'Authentication and token lifecycle' },
+        { name: 'contacts', description: 'Hashed contact sync and account match lookup' },
         { name: 'pairing', description: 'One-time device pairing codes' },
+        { name: 'bots', description: 'In-app bot discovery and bot room bootstrap' },
         { name: 'chat', description: '1:1 rooms, messages, and ACK handling' },
         { name: 'openclaw', description: 'OpenClaw provider diagnostics and test routes' },
         { name: 'ops', description: 'Health, readiness, and metrics endpoints' }

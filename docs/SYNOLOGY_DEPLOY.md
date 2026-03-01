@@ -22,10 +22,11 @@
 ## 3) Verify runtime
 
 - Containers should be running:
+  - `ourhangout-migrate` (one-shot, exits successfully)
   - `ourhangout-api`
   - `ourhangout-postgres`
   - `ourhangout-redis`
-- Check API logs for migration execution on startup.
+- Check `ourhangout-migrate` logs for migration success, then `ourhangout-api` logs for boot success.
 
 ## 4) Post-deploy checks
 
@@ -57,6 +58,6 @@ Backup recommendations:
 
 ## 7) Notes
 
-- Compose startup command runs migration automatically before API start.
+- Compose includes one-shot `migrate` service and starts API only after migration success.
 - For single-device validation, start with `OPENCLAW_MODE=mock`.
 - Switch to `OPENCLAW_MODE=http` when real OpenClaw gateway is reachable from NAS network.

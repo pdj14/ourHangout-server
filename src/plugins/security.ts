@@ -1,9 +1,10 @@
-﻿import fp from 'fastify-plugin';
+import fp from 'fastify-plugin';
 import cors from '@fastify/cors';
 import helmet from '@fastify/helmet';
 import jwt from '@fastify/jwt';
 import rateLimit from '@fastify/rate-limit';
 import { env } from '../config/env';
+import { redis } from '../lib/redis';
 
 export const securityPlugin = fp(async (app) => {
   await app.register(helmet, {
@@ -29,7 +30,10 @@ export const securityPlugin = fp(async (app) => {
 
   await app.register(rateLimit, {
     max: env.RATE_LIMIT_MAX,
-    timeWindow: env.RATE_LIMIT_WINDOW
+    timeWindow: env.RATE_LIMIT_WINDOW,
+    redis,
+    nameSpace: env.RATE_LIMIT_REDIS_NAMESPACE,
+    skipOnError: env.RATE_LIMIT_SKIP_ON_ERROR
   });
 
   await app.register(jwt, {

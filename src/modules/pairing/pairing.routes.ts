@@ -11,14 +11,24 @@ export async function pairingRoutes(app: FastifyInstance): Promise<void> {
         body: {
           type: 'object',
           properties: {
-            ttlSeconds: { type: 'number', minimum: 30, maximum: 3600 }
+            ttlSeconds: { type: 'number', minimum: 30, maximum: 3600 },
+            relationshipType: {
+              type: 'string',
+              enum: ['friend', 'parent_child'],
+              default: 'friend'
+            }
           }
         }
       }
     },
     async (request) => {
-      const body = (request.body as { ttlSeconds?: number } | undefined) ?? {};
-      const data = await app.pairingService.createCode(request.user.sub, body.ttlSeconds);
+      const body =
+        (request.body as { ttlSeconds?: number; relationshipType?: 'friend' | 'parent_child' } | undefined) ?? {};
+      const data = await app.pairingService.createCode(
+        request.user.sub,
+        body.ttlSeconds,
+        body.relationshipType ?? 'friend'
+      );
       return { success: true, data };
     }
   );
@@ -29,7 +39,7 @@ export async function pairingRoutes(app: FastifyInstance): Promise<void> {
       preHandler: app.authenticate,
       schema: {
         tags: ['pairing'],
-        summary: 'Consume one-time pairing code',
+        summary: 'Consume one-time pairing code and create relationship',
         body: {
           type: 'object',
           required: ['code'],
@@ -42,6 +52,21 @@ export async function pairingRoutes(app: FastifyInstance): Promise<void> {
     async (request) => {
       const body = request.body as { code: string };
       const data = await app.pairingService.consumeCode(request.user.sub, body.code);
+      return { success: true, data };
+    }
+  );
+
+  app.get(
+    '/relationships',
+    {
+      preHandler: app.authenticate,
+      schema: {
+        tags: ['pairing'],
+        summary: 'List relationships created by pairing and related room ids'
+      }
+    },
+    async (request) => {
+      const data = await app.pairingService.listRelationships(request.user.sub);
       return { success: true, data };
     }
   );

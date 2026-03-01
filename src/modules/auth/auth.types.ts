@@ -4,6 +4,8 @@
   role: string;
 }
 
+export type AuthProvider = 'local' | 'google';
+
 export interface AuthTokenResponse {
   accessToken: string;
   refreshToken: string;
@@ -15,5 +17,8 @@ export interface SafeUser {
   id: string;
   email: string;
   role: string;
+  authProvider: AuthProvider;
+  displayName?: string;
+  phoneE164?: string;
   createdAt: string;
 }

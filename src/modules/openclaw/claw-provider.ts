@@ -1,8 +1,9 @@
-﻿export interface ClawProviderInput {
+export interface ClawProviderInput {
   messageId: string;
   roomId: string;
   senderId: string;
   recipientId: string;
+  botKey?: string;
   content: string;
 }
 

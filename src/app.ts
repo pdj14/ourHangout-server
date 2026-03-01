@@ -12,17 +12,22 @@ import { websocketRoutes } from './modules/chat/chat.ws';
 import { ConnectionManager } from './modules/chat/connection-manager';
 import { RedisChatEventBus } from './modules/chat/redis-event-bus';
 import { healthRoutes } from './modules/health/health.routes';
+import { BotService } from './modules/bots/bot.service';
+import { botRoutes } from './modules/bots/bot.routes';
 import { ClawBridgeService } from './modules/openclaw/claw-bridge.service';
 import { openClawRoutes } from './modules/openclaw/openclaw.routes';
 import { createClawProvider } from './modules/openclaw/provider.factory';
 import { PairingService } from './modules/pairing/pairing.service';
 import { pairingRoutes } from './modules/pairing/pairing.routes';
+import { ContactsService } from './modules/contacts/contacts.service';
+import { contactsRoutes } from './modules/contacts/contacts.routes';
 import { registerErrorHandlers } from './plugins/error-handler';
 import { securityPlugin } from './plugins/security';
 import { swaggerPlugin } from './plugins/swagger';
 
 export async function buildServer(): Promise<FastifyInstance> {
   const app = Fastify({
+    trustProxy: env.TRUST_PROXY,
     logger: {
       level: env.LOG_LEVEL
     }
@@ -46,6 +51,7 @@ export async function buildServer(): Promise<FastifyInstance> {
   );
 
   const pairingService = new PairingService(db, env, app.log);
+  const contactsService = new ContactsService(db, app.log);
   const chatService = new ChatService({
     db,
     eventBus,
@@ -53,6 +59,12 @@ export async function buildServer(): Promise<FastifyInstance> {
     clawBridge,
     logger: app.log
   });
+  const botService = new BotService({
+    db,
+    chatService,
+    logger: app.log
+  });
+  await botService.ensureDefaultBots();
 
   app.decorate('db', db);
   app.decorate('redis', redis);
@@ -63,7 +75,9 @@ export async function buildServer(): Promise<FastifyInstance> {
   app.decorate('clawBridge', clawBridge);
   app.decorate('authService', authService);
   app.decorate('pairingService', pairingService);
+  app.decorate('contactsService', contactsService);
   app.decorate('chatService', chatService);
+  app.decorate('botService', botService);
 
   registerErrorHandlers(app);
 
@@ -80,7 +94,9 @@ export async function buildServer(): Promise<FastifyInstance> {
   await app.register(healthRoutes);
   await app.register(authRoutes, { prefix: '/v1/auth' });
   await app.register(pairingRoutes, { prefix: '/v1/pairing' });
+  await app.register(contactsRoutes, { prefix: '/v1/contacts' });
   await app.register(chatRoutes, { prefix: '/v1/chats' });
+  await app.register(botRoutes, { prefix: '/v1/bots' });
   await app.register(websocketRoutes, { prefix: '/v1' });
   await app.register(openClawRoutes, { prefix: '/v1/openclaw' });
 

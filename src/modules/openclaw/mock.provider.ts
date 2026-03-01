@@ -11,9 +11,10 @@ export class MockClawProvider implements ClawProvider {
 
   async sendMessage(input: ClawProviderInput): Promise<ClawProviderResult> {
     await wait(180);
+    const botSuffix = input.botKey ? `:${input.botKey}` : '';
     return {
       providerMessageId: `mock-${Date.now()}`,
-      replyText: `[mock-openclaw] ${input.content}`,
+      replyText: `[mock-openclaw${botSuffix}] ${input.content}`,
       raw: {
         echo: true
       }

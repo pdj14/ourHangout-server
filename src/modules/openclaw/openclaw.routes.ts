@@ -36,18 +36,20 @@ export async function openClawRoutes(app: FastifyInstance): Promise<void> {
           type: 'object',
           required: ['content'],
           properties: {
+            botKey: { type: 'string', minLength: 2, maxLength: 64 },
             content: { type: 'string', minLength: 1, maxLength: 500 }
           }
         }
       }
     },
     async (request) => {
-      const body = request.body as { content: string };
+      const body = request.body as { botKey?: string; content: string };
       const data = await app.clawBridge.forwardMessage({
         messageId: `test-${testId()}`,
         roomId: 'test-room',
         senderId: request.user.sub,
         recipientId: request.user.sub,
+        botKey: body.botKey,
         content: body.content
       });
 

@@ -197,23 +197,19 @@ if [[ "$MODE" == "mock" ]]; then
     -H 'Content-Type: application/json' \
     -d '{"email":"parent@ourhangout.local","password":"Parent123!"}')"
 
-  CHILD_LOGIN="$(curl -fsS -X POST http://localhost:3000/v1/auth/login \
-    -H 'Content-Type: application/json' \
-    -d '{"email":"child@ourhangout.local","password":"Child123!"}')"
-
   PARENT_TOKEN="$(printf '%s' "$PARENT_LOGIN" | json_get "data.tokens.accessToken")"
   PARENT_ID="$(printf '%s' "$PARENT_LOGIN" | json_get "data.user.id")"
-  CHILD_TOKEN="$(printf '%s' "$CHILD_LOGIN" | json_get "data.tokens.accessToken")"
-  CHILD_ID="$(printf '%s' "$CHILD_LOGIN" | json_get "data.user.id")"
 
-  CREATE_ROOM_RESP="$(curl -fsS -X POST http://localhost:3000/v1/chats/rooms/direct \
-    -H "Authorization: Bearer ${PARENT_TOKEN}" \
-    -H 'Content-Type: application/json' \
-    -d "{\"peerUserId\":\"${CHILD_ID}\"}")"
-  ROOM_ID="$(printf '%s' "$CREATE_ROOM_RESP" | json_get "data.id")"
+  BOTS_RESP="$(curl -fsS http://localhost:3000/v1/bots \
+    -H "Authorization: Bearer ${PARENT_TOKEN}")"
+  BOT_ID="$(printf '%s' "$BOTS_RESP" | json_get "data.0.id")"
+
+  CREATE_BOT_ROOM_RESP="$(curl -fsS -X POST "http://localhost:3000/v1/bots/${BOT_ID}/rooms" \
+    -H "Authorization: Bearer ${PARENT_TOKEN}")"
+  ROOM_ID="$(printf '%s' "$CREATE_BOT_ROOM_RESP" | json_get "data.room.id")"
 
   WS_LOG_FILE="$(mktemp)"
-  start_ws_listener "$CHILD_TOKEN" "$WS_LOG_FILE"
+  start_ws_listener "$PARENT_TOKEN" "$WS_LOG_FILE"
 
   for _ in $(seq 1 20); do
     if grep -q 'WS_OPEN' "$WS_LOG_FILE" 2>/dev/null; then
@@ -240,21 +236,30 @@ if [[ "$MODE" == "mock" ]]; then
     exit 1
   fi
 
-  MESSAGES_RESP="$(curl -fsS "http://localhost:3000/v1/chats/rooms/${ROOM_ID}/messages?limit=50" \
-    -H "Authorization: Bearer ${PARENT_TOKEN}")"
+  HAS_OUTBOUND="False"
+  HAS_MOCK_REPLY="False"
+  for _ in $(seq 1 20); do
+    MESSAGES_RESP="$(curl -fsS "http://localhost:3000/v1/chats/rooms/${ROOM_ID}/messages?limit=50" \
+      -H "Authorization: Bearer ${PARENT_TOKEN}")"
 
-  HAS_OUTBOUND="$(printf '%s' "$MESSAGES_RESP" | python3 -c 'import json,sys
+    HAS_OUTBOUND="$(printf '%s' "$MESSAGES_RESP" | python3 -c 'import json,sys
 target = sys.argv[1]
 payload = json.load(sys.stdin)
 items = payload.get("data", [])
 print(any(msg.get("content") == target for msg in items))
 ' "$TEST_MESSAGE")"
 
-  HAS_MOCK_REPLY="$(printf '%s' "$MESSAGES_RESP" | python3 -c 'import json,sys
+    HAS_MOCK_REPLY="$(printf '%s' "$MESSAGES_RESP" | python3 -c 'import json,sys
 payload = json.load(sys.stdin)
 items = payload.get("data", [])
-print(any(str(msg.get("content", "")).startswith("[mock-openclaw]") for msg in items))
+print(any(str(msg.get("content", "")).startswith("[mock-openclaw") for msg in items))
 ')"
+
+    if [[ "$HAS_OUTBOUND" == "True" && "$HAS_MOCK_REPLY" == "True" ]]; then
+      break
+    fi
+    sleep 1
+  done
 
   if [[ "$HAS_OUTBOUND" != "True" ]]; then
     echo "Outbound message not found in message list." >&2
@@ -267,7 +272,7 @@ print(any(str(msg.get("content", "")).startswith("[mock-openclaw]") for msg in i
   fi
 
   log "Mock E2E passed"
-  log "parentId=${PARENT_ID}, childId=${CHILD_ID}, roomId=${ROOM_ID}"
+  log "parentId=${PARENT_ID}, botId=${BOT_ID}, roomId=${ROOM_ID}"
   exit 0
 fi
 

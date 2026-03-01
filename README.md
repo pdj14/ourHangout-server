@@ -8,8 +8,16 @@ Node.js + TypeScript backend for **Our Hangout**, designed for local validation 
 - Fastify REST API + WebSocket real-time delivery
 - PostgreSQL persistence + Redis pub/sub event bus
 - JWT access/refresh token auth
+- Email signup/login and Google ID token signup/login
+- Hashed contact sync + contact-to-user matching API
 - Pairing code (one-time consume)
+- Relationship model (`friend` / `parent_child`) with auto room creation on pairing
+- Account security endpoints (`change-password`, `logout-all`)
 - 1:1 room create/list + message send/list + ACK (`sent`/`delivered`)
+- In-app bot model for OpenClaw
+  - default bot auto-provision (`openclaw-assistant`)
+  - `GET /v1/bots`, `POST /v1/bots/:botId/rooms`
+  - only bot-targeted messages are bridged to OpenClaw
 - OpenClaw adapter abstraction
   - `MockClawProvider` (always available)
   - `HttpClawProvider` (`OPENCLAW_BASE_URL`)
@@ -17,7 +25,7 @@ Node.js + TypeScript backend for **Our Hangout**, designed for local validation 
   - `/health`, `/ready`, `/metrics`
 - OpenAPI docs
   - `/docs` (UI), `/documentation/json` (JSON)
-- Docker Compose for Synology compatibility (`api`, `postgres`, `redis`)
+- Docker Compose for Synology compatibility (`migrate`, `api`, `postgres`, `redis`)
 
 ## 2) Quick start (local Node)
 
@@ -64,6 +72,7 @@ cp .env.example .env
 ```
 
 Default `.env.example` is already Docker-network friendly (`postgres`, `redis` hostnames).
+`docker compose up` runs `migrate` once first, then starts `api`.
 
 ### 3.2 Start stack
 
@@ -90,13 +99,21 @@ Short version:
 5. Deploy and verify `api`, `postgres`, `redis` containers all healthy.
 6. Call `/health` and `/ready` from NAS IP + mapped port.
 
+## 4.1) AWS deployment planning
+
+Detailed guide: `docs/AWS_DEPLOY.md`
+
+Use this when moving from NAS/single-node to managed cloud (ALB + ECS/EC2 + RDS + ElastiCache).
+
 ## 5) Environment variables
 
 | Variable | Required | Description |
 |---|---|---|
 | `NODE_ENV` | no | `development`/`production` |
 | `PORT` | no | API port (container internal default `3000`) |
+| `TRUST_PROXY` | no | `true/false`, proxy hops, or CSV list for Fastify `trustProxy` |
 | `JWT_SECRET` | yes | JWT signing secret (>=32 chars) |
+| `GOOGLE_CLIENT_ID` | no | Google OAuth client id (required for `/v1/auth/google`) |
 | `DATABASE_URL` | yes | PostgreSQL connection string |
 | `REDIS_URL` | yes | Redis connection string |
 | `CORS_ORIGINS` | yes | Comma-separated allowed origins |
@@ -106,6 +123,8 @@ Short version:
 | `OPENCLAW_RETRY_COUNT` | no | OpenClaw retry count |
 | `RATE_LIMIT_MAX` | no | Rate limit max requests/window |
 | `RATE_LIMIT_WINDOW` | no | Fastify rate-limit window |
+| `RATE_LIMIT_REDIS_NAMESPACE` | no | Redis key prefix for distributed rate limiting |
+| `RATE_LIMIT_SKIP_ON_ERROR` | no | `true` to fail-open if Redis rate-limit store errors |
 | `PAIRING_CODE_TTL_SECONDS` | no | Pairing code TTL |
 | `ACCESS_TOKEN_TTL` | no | Access token lifetime |
 | `REFRESH_TOKEN_TTL_DAYS` | no | Refresh token lifetime (days) |
@@ -117,13 +136,19 @@ If API runs in Docker, `127.0.0.1` points to API container itself. Use a reachab
 ## 6) Verification checklist (MVP)
 
 See `API_COLLECTION.md` for full commands.
+See `CHAT_BACKEND_REQUIRED_LIST.md` for backend checklist and contact-integration notes.
 
 - `GET /health` returns `success: true`
 - `GET /ready` returns DB/Redis readiness
 - login returns access + refresh token
+- signup creates user and returns access + refresh token
+- google token login/sign-up works when `GOOGLE_CLIENT_ID` is set
+- hashed contact sync and user match lookup works (`/v1/contacts/*`)
+- pairing consume creates relationship row and ensures direct room exists
 - create direct room and send message
+- list bots and create/get bot room
 - websocket `/v1/ws?token=<accessToken>` receives `chat.message` and `chat.ack`
-- with `OPENCLAW_MODE=mock`, message round-trip includes mock reply
+- with `OPENCLAW_MODE=mock`, bot-room message round-trip includes mock reply
 - with `OPENCLAW_MODE=http` and invalid base URL, upstream failure logs are explicit
 
 ## 6.1) WSL one-command E2E scripts
@@ -142,10 +167,18 @@ cd /mnt/c/workspace/ourHome/ourhangout-backend
 bash scripts/e2e-wsl.sh http-error http://127.0.0.1:18888
 ```
 
+Extended flow check (pairing relationship + phone contact match + password security):
+
+```bash
+cd /mnt/c/workspace/ourHome/ourhangout-backend
+bash scripts/e2e-extended-wsl.sh
+```
+
 Notes:
 
 - Script creates `.env` from `.env.example` if missing.
 - Script temporarily edits `.env` for selected mode and restores it automatically on exit.
+- `mock` mode verifies in-app bot room roundtrip (`/v1/bots` -> send -> mock reply).
 - `http-error` mode expects a non-200 provider response and prints recent API logs.
 
 ## 7) Default seed users
