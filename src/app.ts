@@ -15,8 +15,11 @@ import { healthRoutes } from './modules/health/health.routes';
 import { BotService } from './modules/bots/bot.service';
 import { botRoutes } from './modules/bots/bot.routes';
 import { ClawBridgeService } from './modules/openclaw/claw-bridge.service';
+import { OpenClawConnectorHub } from './modules/openclaw/connector-hub';
 import { openClawRoutes } from './modules/openclaw/openclaw.routes';
 import { createClawProvider } from './modules/openclaw/provider.factory';
+import { SocialService } from './modules/social/social.service';
+import { socialRoutes } from './modules/social/social.routes';
 import { PairingService } from './modules/pairing/pairing.service';
 import { pairingRoutes } from './modules/pairing/pairing.routes';
 import { ContactsService } from './modules/contacts/contacts.service';
@@ -40,7 +43,12 @@ export async function buildServer(): Promise<FastifyInstance> {
   const metrics = new MetricsRegistry();
   const connectionManager = new ConnectionManager(app.log);
   const eventBus = new RedisChatEventBus(redis, redisSubscriber, app.log);
-  const clawProvider = createClawProvider(env, app.log);
+  const openClawConnectorHub = new OpenClawConnectorHub(app.log);
+  const clawProvider = createClawProvider({
+    env,
+    logger: app.log,
+    connectorHub: openClawConnectorHub
+  });
   const clawBridge = new ClawBridgeService(clawProvider, env.OPENCLAW_RETRY_COUNT, app.log);
 
   const authService = new AuthService(
@@ -64,6 +72,14 @@ export async function buildServer(): Promise<FastifyInstance> {
     chatService,
     logger: app.log
   });
+
+  const socialService = new SocialService({
+    db,
+    connectionManager,
+    clawBridge,
+    logger: app.log
+  });
+
   await botService.ensureDefaultBots();
 
   app.decorate('db', db);
@@ -72,12 +88,14 @@ export async function buildServer(): Promise<FastifyInstance> {
   app.decorate('metrics', metrics);
   app.decorate('connectionManager', connectionManager);
   app.decorate('eventBus', eventBus);
+  app.decorate('openClawConnectorHub', openClawConnectorHub);
   app.decorate('clawBridge', clawBridge);
   app.decorate('authService', authService);
   app.decorate('pairingService', pairingService);
   app.decorate('contactsService', contactsService);
   app.decorate('chatService', chatService);
   app.decorate('botService', botService);
+  app.decorate('socialService', socialService);
 
   registerErrorHandlers(app);
 
@@ -96,6 +114,7 @@ export async function buildServer(): Promise<FastifyInstance> {
   await app.register(pairingRoutes, { prefix: '/v1/pairing' });
   await app.register(contactsRoutes, { prefix: '/v1/contacts' });
   await app.register(chatRoutes, { prefix: '/v1/chats' });
+  await app.register(socialRoutes, { prefix: '/v1' });
   await app.register(botRoutes, { prefix: '/v1/bots' });
   await app.register(websocketRoutes, { prefix: '/v1' });
   await app.register(openClawRoutes, { prefix: '/v1/openclaw' });
@@ -107,6 +126,7 @@ export async function buildServer(): Promise<FastifyInstance> {
   });
 
   app.addHook('onClose', async () => {
+    app.openClawConnectorHub.closeAll();
     await app.eventBus.close();
     await closeRedis();
     await closeDb();

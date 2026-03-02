@@ -1,0 +1,42 @@
+export type MessageKind = 'text' | 'image' | 'video' | 'system';
+export type MessageDelivery = 'sent' | 'delivered' | 'read';
+export type RoomType = 'direct' | 'group';
+
+export interface UserProfileDto {
+  id: string;
+  name: string;
+  status?: string;
+  email: string;
+  avatarUri?: string;
+}
+
+export interface FriendDto {
+  id: string;
+  name: string;
+  status?: string;
+  trusted: boolean;
+}
+
+export interface RoomDto {
+  id: string;
+  title: string;
+  members: string[];
+  isGroup: boolean;
+  favorite: boolean;
+  muted: boolean;
+  unread: number;
+  preview?: string;
+  updatedAt: string;
+}
+
+export interface RoomMessageDto {
+  id: string;
+  roomId: string;
+  senderId?: string;
+  senderName: string;
+  kind: MessageKind;
+  text?: string;
+  uri?: string;
+  at: string;
+  delivery: MessageDelivery;
+}

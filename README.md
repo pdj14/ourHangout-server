@@ -14,13 +14,26 @@ Node.js + TypeScript backend for **Our Hangout**, designed for local validation 
 - Relationship model (`friend` / `parent_child`) with auto room creation on pairing
 - Account security endpoints (`change-password`, `logout-all`)
 - 1:1 room create/list + message send/list + ACK (`sent`/`delivered`)
+- Social API (spec-aligned) under `/v1`
+  - profile (`GET/PATCH /me`)
+  - friends + requests + trusted flag
+  - direct/group rooms, room settings, leave/delete
+  - message kinds (`text/image/video/system`) + cursor pagination
+  - room read API (`POST /rooms/:roomId/read`) with `delivery=read`
+  - media upload URL issue/complete
+  - abuse report API + parent report queue
+  - push token register/remove
 - In-app bot model for OpenClaw
   - default bot auto-provision (`openclaw-assistant`)
   - `GET /v1/bots`, `POST /v1/bots/:botId/rooms`
   - only bot-targeted messages are bridged to OpenClaw
+  - group room bridge trigger: explicit `/bot` or `/claw` command, or `@bot` mention
+  - connector hub websocket: `GET /v1/openclaw/connector/ws` (Telegram-like bot connector model)
 - OpenClaw adapter abstraction
+  - `ConnectorClawProvider` (`OPENCLAW_MODE=connector`)
   - `MockClawProvider` (always available)
   - `HttpClawProvider` (`OPENCLAW_BASE_URL`)
+  - protocol reference: `docs/OPENCLAW_CONNECTOR_PROTOCOL.md`
 - Basic operational endpoints
   - `/health`, `/ready`, `/metrics`
 - OpenAPI docs
@@ -48,7 +61,8 @@ Adjust `.env` for local DB/Redis host if you run API outside Docker:
 DATABASE_URL=postgresql://ourhangout:ourhangout_dev_pw@localhost:5432/ourhangout
 REDIS_URL=redis://localhost:6379
 JWT_SECRET=<at-least-32-chars>
-OPENCLAW_MODE=mock
+OPENCLAW_MODE=connector
+OPENCLAW_CONNECTOR_TOKEN=<long-random-secret>
 ```
 
 ### 2.3 Install + migrate + seed + run
@@ -117,8 +131,9 @@ Use this when moving from NAS/single-node to managed cloud (ALB + ECS/EC2 + RDS 
 | `DATABASE_URL` | yes | PostgreSQL connection string |
 | `REDIS_URL` | yes | Redis connection string |
 | `CORS_ORIGINS` | yes | Comma-separated allowed origins |
-| `OPENCLAW_MODE` | yes | `mock` or `http` |
+| `OPENCLAW_MODE` | yes | `mock`, `http`, or `connector` |
 | `OPENCLAW_BASE_URL` | yes (http mode) | OpenClaw gateway base URL |
+| `OPENCLAW_CONNECTOR_TOKEN` | yes (connector mode) | Shared secret for connector websocket auth |
 | `OPENCLAW_TIMEOUT_MS` | no | OpenClaw HTTP timeout |
 | `OPENCLAW_RETRY_COUNT` | no | OpenClaw retry count |
 | `RATE_LIMIT_MAX` | no | Rate limit max requests/window |
@@ -132,6 +147,10 @@ Use this when moving from NAS/single-node to managed cloud (ALB + ECS/EC2 + RDS 
 
 `OPENCLAW_BASE_URL` note:
 If API runs in Docker, `127.0.0.1` points to API container itself. Use a reachable host/IP from the container network.
+
+Connector mode note:
+Run connector client on OpenClaw-side device and connect to:
+`ws://<BE_HOST>:3000/v1/openclaw/connector/ws?token=<OPENCLAW_CONNECTOR_TOKEN>&connectorId=<id>&botKey=openclaw-assistant`
 
 ## 6) Verification checklist (MVP)
 
@@ -147,9 +166,14 @@ See `CHAT_BACKEND_REQUIRED_LIST.md` for backend checklist and contact-integratio
 - pairing consume creates relationship row and ensures direct room exists
 - create direct room and send message
 - list bots and create/get bot room
+- (connector mode) connector websocket connected and visible via `GET /v1/openclaw/connector/status`
 - websocket `/v1/ws?token=<accessToken>` receives `chat.message` and `chat.ack`
+- websocket `/v1/ws?token=<accessToken>` also supports:
+  - inbound commands: `message.send`, `message.read`
+  - push events: `message.new`, `message.delivery`, `room.updated`, `room.unread.updated`, `friend.updated`, `report.received`
 - with `OPENCLAW_MODE=mock`, bot-room message round-trip includes mock reply
 - with `OPENCLAW_MODE=http` and invalid base URL, upstream failure logs are explicit
+- with `OPENCLAW_MODE=connector` and no connector connected, OpenClaw provider ping/report shows unavailable
 
 ## 6.1) WSL one-command E2E scripts
 
@@ -181,6 +205,17 @@ Notes:
 - `mock` mode verifies in-app bot room roundtrip (`/v1/bots` -> send -> mock reply).
 - `http-error` mode expects a non-200 provider response and prints recent API logs.
 
+Connector sample client:
+
+```bash
+OPENCLAW_CONNECTOR_TOKEN=replace-openclaw-connector-token \
+HUB_WS_URL=ws://localhost:3000/v1/openclaw/connector/ws \
+CONNECTOR_ID=openclaw-device-1 \
+CONNECTOR_BOT_KEYS=openclaw-assistant \
+CONNECTOR_MODE=mock \
+npm run connector:dev
+```
+
 ## 7) Default seed users
 
 After `npm run seed`:
@@ -201,6 +236,7 @@ After `npm run seed`:
 ## 9) TODO / assumptions
 
 - `HttpClawProvider` currently assumes OpenClaw endpoint `POST /v1/messages` and optional `replyText` in response.
+- `ConnectorClawProvider` expects connector protocol events: `openclaw.request` -> `openclaw.response`.
 - If OpenClaw contract differs, update only provider layer (`src/modules/openclaw`) without touching chat/auth modules.
-- ACK stage is minimal (`sent`, `delivered`). `read` stage is not implemented yet.
+- Message delivery in group chat is currently room-level simplified (`sent`/`delivered`/`read`) and not per-recipient state.
 - No background job queue yet; retry is in-process exponential backoff.

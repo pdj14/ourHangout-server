@@ -57,7 +57,7 @@ export async function healthRoutes(app: FastifyInstance): Promise<void> {
         checks.openclaw = false;
       }
 
-      const openClawRequired = env.OPENCLAW_MODE === 'http';
+      const openClawRequired = env.OPENCLAW_MODE !== 'mock';
       const ready = checks.postgres && checks.redis && (!openClawRequired || checks.openclaw);
 
       if (!ready) {

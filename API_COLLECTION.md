@@ -195,6 +195,165 @@ curl -s -X POST http://localhost:3000/v1/chats/messages/<MESSAGE_ID>/ack \
   -H "Authorization: Bearer <ACCESS_TOKEN>"
 ```
 
+## 5-B) Social API (BACKEND_API_SPEC aligned)
+
+### Me profile
+
+```bash
+curl -s http://localhost:3000/v1/me \
+  -H "Authorization: Bearer <ACCESS_TOKEN>"
+```
+
+```bash
+curl -s -X PATCH http://localhost:3000/v1/me \
+  -H "Authorization: Bearer <ACCESS_TOKEN>" \
+  -H "Content-Type: application/json" \
+  -d '{"name":"Minji","status":"Happy today","avatarUri":"https://cdn.example/avatar.jpg"}'
+```
+
+### Avatar/media upload URL
+
+```bash
+curl -s -X POST http://localhost:3000/v1/me/avatar/upload-url \
+  -H "Authorization: Bearer <ACCESS_TOKEN>" \
+  -H "Content-Type: application/json" \
+  -d '{"mimeType":"image/jpeg","size":230123}'
+```
+
+```bash
+curl -s -X POST http://localhost:3000/v1/media/upload-url \
+  -H "Authorization: Bearer <ACCESS_TOKEN>" \
+  -H "Content-Type: application/json" \
+  -d '{"kind":"image","mimeType":"image/jpeg","size":542312}'
+```
+
+```bash
+curl -s -X POST http://localhost:3000/v1/media/complete \
+  -H "Authorization: Bearer <ACCESS_TOKEN>" \
+  -H "Content-Type: application/json" \
+  -d '{"fileUrl":"https://mock-storage.local/media/2026/03/abc.jpg","kind":"image"}'
+```
+
+### Friends
+
+```bash
+curl -s "http://localhost:3000/v1/friends?limit=30" \
+  -H "Authorization: Bearer <ACCESS_TOKEN>"
+```
+
+```bash
+curl -s "http://localhost:3000/v1/friends/search?q=child&limit=20" \
+  -H "Authorization: Bearer <ACCESS_TOKEN>"
+```
+
+```bash
+curl -s -X POST http://localhost:3000/v1/friends/requests \
+  -H "Authorization: Bearer <ACCESS_TOKEN>" \
+  -H "Content-Type: application/json" \
+  -d '{"targetUserId":"<TARGET_USER_ID>"}'
+```
+
+```bash
+curl -s -X POST http://localhost:3000/v1/friends/requests/<REQUEST_ID>/accept \
+  -H "Authorization: Bearer <ACCESS_TOKEN>"
+```
+
+```bash
+curl -s -X PATCH http://localhost:3000/v1/friends/<FRIEND_USER_ID> \
+  -H "Authorization: Bearer <ACCESS_TOKEN>" \
+  -H "Content-Type: application/json" \
+  -d '{"trusted":true}'
+```
+
+### Rooms
+
+```bash
+curl -s "http://localhost:3000/v1/rooms?limit=30" \
+  -H "Authorization: Bearer <ACCESS_TOKEN>"
+```
+
+```bash
+curl -s -X POST http://localhost:3000/v1/rooms/direct \
+  -H "Authorization: Bearer <ACCESS_TOKEN>" \
+  -H "Content-Type: application/json" \
+  -d '{"friendUserId":"<FRIEND_USER_ID>"}'
+```
+
+```bash
+curl -s -X POST http://localhost:3000/v1/rooms/group \
+  -H "Authorization: Bearer <ACCESS_TOKEN>" \
+  -H "Content-Type: application/json" \
+  -d '{"title":"Class Friends","memberUserIds":["<USER_ID_1>","<USER_ID_2>"]}'
+```
+
+```bash
+curl -s -X PATCH http://localhost:3000/v1/rooms/<ROOM_ID>/settings \
+  -H "Authorization: Bearer <ACCESS_TOKEN>" \
+  -H "Content-Type: application/json" \
+  -d '{"favorite":true,"muted":false}'
+```
+
+```bash
+curl -s -X POST http://localhost:3000/v1/rooms/<ROOM_ID>/leave \
+  -H "Authorization: Bearer <ACCESS_TOKEN>"
+```
+
+```bash
+curl -s -X DELETE http://localhost:3000/v1/rooms/<ROOM_ID> \
+  -H "Authorization: Bearer <ACCESS_TOKEN>"
+```
+
+### Room messages + read
+
+```bash
+curl -s "http://localhost:3000/v1/rooms/<ROOM_ID>/messages?limit=50" \
+  -H "Authorization: Bearer <ACCESS_TOKEN>"
+```
+
+```bash
+curl -s -X POST http://localhost:3000/v1/rooms/<ROOM_ID>/messages \
+  -H "Authorization: Bearer <ACCESS_TOKEN>" \
+  -H "Content-Type: application/json" \
+  -d '{"clientMessageId":"c_001","kind":"text","text":"안녕!"}'
+```
+
+```bash
+curl -s -X POST http://localhost:3000/v1/rooms/<ROOM_ID>/read \
+  -H "Authorization: Bearer <ACCESS_TOKEN>" \
+  -H "Content-Type: application/json" \
+  -d '{"lastReadMessageId":"<MESSAGE_ID>"}'
+```
+
+### Report queue
+
+```bash
+curl -s -X POST http://localhost:3000/v1/rooms/<ROOM_ID>/report \
+  -H "Authorization: Bearer <ACCESS_TOKEN>" \
+  -H "Content-Type: application/json" \
+  -d '{"reason":"abuse","messageId":"<MESSAGE_ID>"}'
+```
+
+```bash
+curl -s "http://localhost:3000/v1/admin/reports?status=open&limit=30" \
+  -H "Authorization: Bearer <PARENT_ACCESS_TOKEN>"
+```
+
+```bash
+curl -s -X PATCH http://localhost:3000/v1/admin/reports/<REPORT_ID> \
+  -H "Authorization: Bearer <PARENT_ACCESS_TOKEN>" \
+  -H "Content-Type: application/json" \
+  -d '{"status":"reviewed"}'
+```
+
+### Push token registration
+
+```bash
+curl -s -X POST http://localhost:3000/v1/push-tokens \
+  -H "Authorization: Bearer <ACCESS_TOKEN>" \
+  -H "Content-Type: application/json" \
+  -d '{"platform":"android","pushToken":"<FCM_TOKEN>"}'
+```
+
 ## 6) WebSocket
 
 Endpoint:
@@ -212,6 +371,12 @@ Expected push events:
 - `ws.connected`
 - `chat.message`
 - `chat.ack`
+- `message.new`
+- `message.delivery`
+- `room.updated`
+- `room.unread.updated`
+- `friend.updated`
+- `report.received`
 
 Manual ACK via websocket:
 
@@ -219,7 +384,48 @@ Manual ACK via websocket:
 {"type":"ack","messageId":"<MESSAGE_UUID>"}
 ```
 
+WS social message send example:
+
+```json
+{"event":"message.send","data":{"roomId":"<ROOM_ID>","kind":"text","text":"hello","clientMessageId":"c_123"}}
+```
+
+Group room bot trigger rule:
+
+- direct room: bot participant이면 항상 OpenClaw 브리지 전달
+- group room: `/bot`, `/claw`, `/<bot_key>` 명령 또는 `@bot` 멘션이 있을 때만 전달
+
+WS social read example:
+
+```json
+{"event":"message.read","data":{"roomId":"<ROOM_ID>","lastReadMessageId":"<MESSAGE_ID>"}}
+```
+
 ## 7) OpenClaw test
+
+### Connector hub status
+
+```bash
+curl -s http://localhost:3000/v1/openclaw/connector/status \
+  -H "Authorization: Bearer <ACCESS_TOKEN>"
+```
+
+### Connector websocket connect (OpenClaw-side device)
+
+```bash
+npx wscat -c "ws://localhost:3000/v1/openclaw/connector/ws?token=<OPENCLAW_CONNECTOR_TOKEN>&connectorId=device-1&botKey=openclaw-assistant"
+```
+
+Connector request/response protocol:
+
+- server -> connector:
+```json
+{"event":"openclaw.request","data":{"requestId":"...","messageId":"...","roomId":"...","senderId":"...","recipientId":"...","botKey":"openclaw-assistant","content":"hello"}}
+```
+- connector -> server:
+```json
+{"event":"openclaw.response","data":{"requestId":"...","ok":true,"providerMessageId":"p_1","replyText":"hello from connector"}}
+```
 
 ### Provider ping
 
@@ -237,16 +443,22 @@ curl -s -X POST http://localhost:3000/v1/openclaw/test-message \
   -d '{"content":"bridge test"}'
 ```
 
-## 8) Minimal E2E scenario (mock mode, bot room)
+## 8) Minimal E2E scenario (connector mode, bot room)
 
-1. `OPENCLAW_MODE=mock`
-2. Login as user
-3. Call `GET /v1/bots` and select bot id
-4. Create/get room with `POST /v1/bots/:botId/rooms`
-5. User opens websocket
-6. User sends message in bot room
-7. User receives `chat.message` + `chat.ack` (`delivered`)
-8. Mock provider generates reply message routed back to user websocket
+1. Set:
+```env
+OPENCLAW_MODE=connector
+OPENCLAW_CONNECTOR_TOKEN=<LONG_SECRET>
+```
+2. Start connector on OpenClaw device and connect to `/v1/openclaw/connector/ws`
+3. Check `GET /v1/openclaw/connector/status` -> activeConnectors > 0
+4. Login as user
+5. Call `GET /v1/bots` and select bot id
+6. Create/get room with `POST /v1/bots/:botId/rooms`
+7. User opens websocket
+8. User sends message in bot room
+9. Connector handles `openclaw.request` and sends `openclaw.response`
+10. User receives bot reply pushed via websocket
 
 ## 9) HTTP provider failure check
 
