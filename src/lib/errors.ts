@@ -26,6 +26,8 @@ export class AppError extends Error {
 
   constructor(statusCode: number, code: ErrorCode, message: string, details?: unknown) {
     super(message);
+    this.name = 'AppError';
+    Object.setPrototypeOf(this, new.target.prototype);
     this.statusCode = statusCode;
     this.code = code;
     this.details = details;
@@ -33,5 +35,19 @@ export class AppError extends Error {
 }
 
 export function isAppError(error: unknown): error is AppError {
-  return error instanceof AppError;
+  if (!(error instanceof Error) || !error) {
+    return false;
+  }
+
+  const candidate = error as {
+    statusCode?: unknown;
+    code?: unknown;
+  };
+
+  return (
+    typeof candidate.statusCode === 'number' &&
+    Number.isFinite(candidate.statusCode) &&
+    typeof candidate.code === 'string' &&
+    candidate.code.length > 0
+  );
 }

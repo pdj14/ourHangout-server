@@ -11,6 +11,7 @@ const envSchema = z.object({
   REDIS_URL: z.string().min(1),
   JWT_SECRET: z.string().min(32),
   GOOGLE_CLIENT_ID: z.string().default(''),
+  GOOGLE_CLIENT_IDS: z.string().default(''),
   ACCESS_TOKEN_TTL: z.string().default('15m'),
   REFRESH_TOKEN_TTL_DAYS: z.coerce.number().int().positive().default(14),
   CORS_ORIGINS: z.string().default('http://localhost:5173'),
@@ -77,6 +78,14 @@ export const env = {
   ...rawEnv,
   TRUST_PROXY: parseTrustProxy(rawEnv.TRUST_PROXY),
   CORS_ORIGINS: rawEnv.CORS_ORIGINS.split(',').map((origin) => origin.trim()).filter(Boolean),
+  GOOGLE_CLIENT_IDS: Array.from(
+    new Set(
+      [
+        ...rawEnv.GOOGLE_CLIENT_IDS.split(',').map((clientId) => clientId.trim()),
+        rawEnv.GOOGLE_CLIENT_ID.trim()
+      ].filter(Boolean)
+    )
+  ),
   RATE_LIMIT_SKIP_ON_ERROR: parseBoolean(rawEnv.RATE_LIMIT_SKIP_ON_ERROR, true)
 };
 

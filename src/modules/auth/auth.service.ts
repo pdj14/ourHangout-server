@@ -399,18 +399,19 @@ export class AuthService {
 
   private getGoogleClient(): OAuth2Client {
     if (!this.googleClient) {
-      this.googleClient = new OAuth2Client(this.env.GOOGLE_CLIENT_ID);
+      this.googleClient = new OAuth2Client();
     }
 
     return this.googleClient;
   }
 
   private async verifyGoogleToken(idToken: string): Promise<GoogleIdentity> {
-    if (!this.env.GOOGLE_CLIENT_ID) {
+    const audiences = this.env.GOOGLE_CLIENT_IDS;
+    if (audiences.length < 1) {
       throw new AppError(
         503,
         ErrorCodes.AUTH_GOOGLE_CONFIG,
-        'Google login is not configured. Set GOOGLE_CLIENT_ID first.'
+        'Google login is not configured. Set GOOGLE_CLIENT_ID(S) first.'
       );
     }
 
@@ -428,7 +429,7 @@ export class AuthService {
     try {
       const ticket = await client.verifyIdToken({
         idToken,
-        audience: this.env.GOOGLE_CLIENT_ID
+        audience: audiences
       });
       payload = ticket.getPayload();
     } catch (error) {

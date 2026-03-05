@@ -127,7 +127,8 @@ Use this when moving from NAS/single-node to managed cloud (ALB + ECS/EC2 + RDS 
 | `PORT` | no | API port (container internal default `3000`) |
 | `TRUST_PROXY` | no | `true/false`, proxy hops, or CSV list for Fastify `trustProxy` |
 | `JWT_SECRET` | yes | JWT signing secret (>=32 chars) |
-| `GOOGLE_CLIENT_ID` | no | Google OAuth client id (required for `/v1/auth/google`) |
+| `GOOGLE_CLIENT_ID` | no | Google OAuth client id (single audience, backward compatibility) |
+| `GOOGLE_CLIENT_IDS` | no | Comma-separated Google OAuth client ids (recommended for app/web multi-audience) |
 | `DATABASE_URL` | yes | PostgreSQL connection string |
 | `REDIS_URL` | yes | Redis connection string |
 | `CORS_ORIGINS` | yes | Comma-separated allowed origins |
@@ -161,7 +162,7 @@ See `CHAT_BACKEND_REQUIRED_LIST.md` for backend checklist and contact-integratio
 - `GET /ready` returns DB/Redis readiness
 - login returns access + refresh token
 - signup creates user and returns access + refresh token
-- google token login/sign-up works when `GOOGLE_CLIENT_ID` is set
+- google token login/sign-up works when `GOOGLE_CLIENT_ID` or `GOOGLE_CLIENT_IDS` is set
 - hashed contact sync and user match lookup works (`/v1/contacts/*`)
 - pairing consume creates relationship row and ensures direct room exists
 - create direct room and send message
