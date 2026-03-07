@@ -1071,6 +1071,9 @@ export class SocialService {
       throw new AppError(409, ErrorCodes.CONFLICT, 'Use DELETE /rooms/:roomId for direct rooms.');
     }
 
+    const profile = await this.getUserProfileRow(userId);
+    const leaveText = `${normalizeName(profile.display_name, profile.email)} left the room.`;
+
     await this.db.query(
       `UPDATE room_members
        SET left_at = NOW()
@@ -1087,7 +1090,19 @@ export class SocialService {
       [roomId]
     );
 
-    this.emitToUsers([userId], {
+    const inserted = await this.appendSystemRoomMessage(roomId, leaveText);
+    const members = await this.getActiveRoomMemberIds(roomId);
+    if (inserted) {
+      this.emitToUsers(members, {
+        event: 'message.new',
+        data: {
+          roomId,
+          message: inserted
+        }
+      });
+    }
+
+    this.emitToUsers([...members, userId], {
       event: 'room.updated',
       data: {
         roomId
@@ -1101,17 +1116,38 @@ export class SocialService {
     const room = await this.assertRoomMembership(roomId, userId);
 
     if (room.type === 'direct') {
+      const profile = await this.getUserProfileRow(userId);
+      const leaveText = `${normalizeName(profile.display_name, profile.email)} left the room.`;
+
       await this.db.query(
-        `INSERT INTO room_user_settings (room_id, user_id, favorite, muted, hidden_at, created_at, updated_at)
-         VALUES ($1, $2, FALSE, FALSE, NOW(), NOW(), NOW())
-         ON CONFLICT (room_id, user_id)
-         DO UPDATE SET
-           hidden_at = NOW(),
-           updated_at = NOW()`,
+        `UPDATE room_members
+         SET left_at = NOW()
+         WHERE room_id = $1
+           AND user_id = $2
+           AND left_at IS NULL`,
         [roomId, userId]
       );
 
-      this.emitToUsers([userId], {
+      await this.db.query(
+        `UPDATE rooms
+         SET updated_at = NOW()
+         WHERE id = $1`,
+        [roomId]
+      );
+
+      const inserted = await this.appendSystemRoomMessage(roomId, leaveText);
+      const members = await this.getActiveRoomMemberIds(roomId);
+      if (inserted) {
+        this.emitToUsers(members, {
+          event: 'message.new',
+          data: {
+            roomId,
+            message: inserted
+          }
+        });
+      }
+
+      this.emitToUsers([...members, userId], {
         event: 'room.updated',
         data: {
           roomId
@@ -1235,20 +1271,14 @@ export class SocialService {
     clientMessageId?: string;
   }): Promise<RoomMessageDto> {
     const room = await this.assertRoomMembership(params.roomId, params.userId);
-
-    if (room.type === 'direct') {
-      await this.db.query(
-        `UPDATE room_members
-         SET left_at = NULL
-         WHERE room_id = $1`,
-        [params.roomId]
-      );
-    }
-
     const memberUserIds = await this.getActiveRoomMemberIds(params.roomId);
 
     if (memberUserIds.length < 1) {
       throw new AppError(409, ErrorCodes.CONFLICT, 'Room has no active members.');
+    }
+
+    if (room.type === 'direct' && memberUserIds.length < 2) {
+      throw new AppError(409, ErrorCodes.CONFLICT, 'The other participant already left this room.');
     }
 
     const kind = params.kind;
@@ -2033,11 +2063,12 @@ export class SocialService {
     }
 
     const result = await this.db.query<RoomMemberRow>(
-      `SELECT room_id, user_id
-       FROM room_members
-       WHERE room_id = ANY($1::uuid[])
-         AND left_at IS NULL
-       ORDER BY joined_at ASC`,
+      `SELECT mem.room_id, mem.user_id
+       FROM room_members mem
+       INNER JOIN rooms r ON r.id = mem.room_id
+       WHERE mem.room_id = ANY($1::uuid[])
+         AND (r.type = 'direct' OR mem.left_at IS NULL)
+       ORDER BY mem.joined_at ASC`,
       [roomIds]
     );
 
@@ -2064,8 +2095,7 @@ export class SocialService {
        INNER JOIN users u ON u.id = mem.user_id
        WHERE mem.room_id = ANY($1::uuid[])
          AND r.type = 'direct'
-         AND mem.user_id <> $2
-         AND mem.left_at IS NULL`,
+         AND mem.user_id <> $2`,
       [roomIds, userId]
     );
 
@@ -2215,6 +2245,24 @@ export class SocialService {
     }
 
     return row;
+  }
+
+  private async appendSystemRoomMessage(roomId: string, text: string): Promise<RoomMessageDto | null> {
+    const insertResult = await this.db.query<{ id: string }>(
+      `INSERT INTO room_messages (room_id, sender_id, kind, text, media_url, client_message_id, delivery, created_at)
+       VALUES ($1, NULL, 'system', $2, NULL, NULL, 'read', NOW())
+       RETURNING id`,
+      [roomId, text]
+    );
+
+    await this.db.query(
+      `UPDATE rooms
+       SET updated_at = NOW()
+       WHERE id = $1`,
+      [roomId]
+    );
+
+    return this.fetchMessageById(insertResult.rows[0].id);
   }
 
   private mapProfile(row: UserProfileRow): UserProfileDto {
