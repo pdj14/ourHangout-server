@@ -39,4 +39,6 @@ export interface RoomMessageDto {
   uri?: string;
   at: string;
   delivery: MessageDelivery;
+  unreadCount?: number;
+  readByNames?: string[];
 }

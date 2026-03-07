@@ -96,6 +96,8 @@ type RoomMessageRow = {
   created_at: Date;
   sender_name: string | null;
   sender_email: string | null;
+  unread_count?: number;
+  read_by_names?: string[] | null;
 };
 
 type RoleRow = {
@@ -1173,9 +1175,34 @@ export class SocialService {
               m.delivery,
               m.created_at,
               u.display_name AS sender_name,
-              u.email AS sender_email
+              u.email AS sender_email,
+              receipts.unread_count,
+              receipts.read_by_names
        FROM room_messages m
        LEFT JOIN users u ON u.id = m.sender_id
+       LEFT JOIN LATERAL (
+         SELECT COUNT(*) FILTER (
+                  WHERE m.sender_id IS NOT NULL
+                    AND (rus.last_read_at IS NULL OR rus.last_read_at < m.created_at)
+                )::int AS unread_count,
+                COALESCE(
+                  array_agg(COALESCE(NULLIF(trim(ru.display_name), ''), ru.email) ORDER BY COALESCE(NULLIF(trim(ru.display_name), ''), ru.email))
+                    FILTER (
+                      WHERE m.sender_id IS NOT NULL
+                        AND rus.last_read_at IS NOT NULL
+                        AND rus.last_read_at >= m.created_at
+                    ),
+                  ARRAY[]::text[]
+                ) AS read_by_names
+         FROM room_members rm
+         INNER JOIN users ru ON ru.id = rm.user_id
+         LEFT JOIN room_user_settings rus
+           ON rus.room_id = m.room_id
+          AND rus.user_id = rm.user_id
+         WHERE rm.room_id = m.room_id
+           AND rm.left_at IS NULL
+           AND (m.sender_id IS NULL OR rm.user_id IS DISTINCT FROM m.sender_id)
+       ) receipts ON TRUE
        WHERE m.room_id = $1
          AND (
            $2::timestamptz IS NULL OR
@@ -1858,9 +1885,34 @@ export class SocialService {
               m.delivery,
               m.created_at,
               u.display_name AS sender_name,
-              u.email AS sender_email
+              u.email AS sender_email,
+              receipts.unread_count,
+              receipts.read_by_names
        FROM room_messages m
        LEFT JOIN users u ON u.id = m.sender_id
+       LEFT JOIN LATERAL (
+         SELECT COUNT(*) FILTER (
+                  WHERE m.sender_id IS NOT NULL
+                    AND (rus.last_read_at IS NULL OR rus.last_read_at < m.created_at)
+                )::int AS unread_count,
+                COALESCE(
+                  array_agg(COALESCE(NULLIF(trim(ru.display_name), ''), ru.email) ORDER BY COALESCE(NULLIF(trim(ru.display_name), ''), ru.email))
+                    FILTER (
+                      WHERE m.sender_id IS NOT NULL
+                        AND rus.last_read_at IS NOT NULL
+                        AND rus.last_read_at >= m.created_at
+                    ),
+                  ARRAY[]::text[]
+                ) AS read_by_names
+         FROM room_members rm
+         INNER JOIN users ru ON ru.id = rm.user_id
+         LEFT JOIN room_user_settings rus
+           ON rus.room_id = m.room_id
+          AND rus.user_id = rm.user_id
+         WHERE rm.room_id = m.room_id
+           AND rm.left_at IS NULL
+           AND (m.sender_id IS NULL OR rm.user_id IS DISTINCT FROM m.sender_id)
+       ) receipts ON TRUE
        WHERE m.id = $1
        LIMIT 1`,
       [messageId]
@@ -1959,7 +2011,9 @@ export class SocialService {
       ...(row.text ? { text: row.text } : {}),
       ...(row.media_url ? { uri: row.media_url } : {}),
       at: row.created_at.toISOString(),
-      delivery: row.delivery
+      delivery: row.delivery,
+      ...(typeof row.unread_count === 'number' ? { unreadCount: row.unread_count } : {}),
+      ...(Array.isArray(row.read_by_names) && row.read_by_names.length > 0 ? { readByNames: row.read_by_names } : {})
     };
   }
 
