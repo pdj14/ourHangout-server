@@ -92,7 +92,8 @@ export class FcmPushService {
             android: {
               priority: 'high',
               notification: {
-                channel_id: this.env.FCM_ANDROID_CHANNEL_ID || 'messages'
+                channel_id: this.env.FCM_ANDROID_CHANNEL_ID || 'messages',
+                tag: String(payload.data?.roomId || '')
               }
             },
             apns: {
