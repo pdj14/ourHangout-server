@@ -1935,7 +1935,7 @@ export class SocialService {
     return this.mapMessageDto(row);
   }
 
-  private async getRoomByIdForUser(userId: string, roomId: string): Promise<RoomDto> {
+  async getRoomByIdForUser(userId: string, roomId: string): Promise<RoomDto> {
     const result = await this.db.query<RoomListRow>(
       `SELECT r.id,
               r.type,

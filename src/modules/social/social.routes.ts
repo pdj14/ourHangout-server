@@ -367,6 +367,29 @@ export async function socialRoutes(app: FastifyInstance): Promise<void> {
     }
   );
 
+  app.get(
+    '/rooms/:roomId',
+    {
+      preHandler: app.authenticate,
+      schema: {
+        tags: ['social'],
+        summary: 'Get room detail',
+        params: {
+          type: 'object',
+          required: ['roomId'],
+          properties: {
+            roomId: { type: 'string', format: 'uuid' }
+          }
+        }
+      }
+    },
+    async (request) => {
+      const params = request.params as { roomId: string };
+      const data = await app.socialService.getRoomByIdForUser(request.user.sub, params.roomId);
+      return { success: true, data };
+    }
+  );
+
   app.post(
     '/rooms/:roomId/leave',
     {
