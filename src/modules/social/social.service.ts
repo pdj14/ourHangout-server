@@ -865,6 +865,11 @@ export class SocialService {
          AND mem.left_at IS NULL
          AND r.deleted_at IS NULL
          AND (
+           r.type <> 'direct' OR
+           rus.hidden_at IS NULL OR
+           r.updated_at > rus.hidden_at
+         )
+         AND (
            $2::timestamptz IS NULL OR
            r.updated_at < $2 OR
            (r.updated_at = $2 AND r.id < $3::uuid)
@@ -1097,19 +1102,13 @@ export class SocialService {
 
     if (room.type === 'direct') {
       await this.db.query(
-        `UPDATE room_members
-         SET left_at = NOW()
-         WHERE room_id = $1
-           AND user_id = $2
-           AND left_at IS NULL`,
+        `INSERT INTO room_user_settings (room_id, user_id, favorite, muted, hidden_at, created_at, updated_at)
+         VALUES ($1, $2, FALSE, FALSE, NOW(), NOW(), NOW())
+         ON CONFLICT (room_id, user_id)
+         DO UPDATE SET
+           hidden_at = NOW(),
+           updated_at = NOW()`,
         [roomId, userId]
-      );
-
-      await this.db.query(
-        `UPDATE rooms
-         SET updated_at = NOW()
-         WHERE id = $1`,
-        [roomId]
       );
 
       this.emitToUsers([userId], {
@@ -1236,6 +1235,16 @@ export class SocialService {
     clientMessageId?: string;
   }): Promise<RoomMessageDto> {
     const room = await this.assertRoomMembership(params.roomId, params.userId);
+
+    if (room.type === 'direct') {
+      await this.db.query(
+        `UPDATE room_members
+         SET left_at = NULL
+         WHERE room_id = $1`,
+        [params.roomId]
+      );
+    }
+
     const memberUserIds = await this.getActiveRoomMemberIds(params.roomId);
 
     if (memberUserIds.length < 1) {
@@ -2328,7 +2337,10 @@ export class SocialService {
        VALUES
          ($1, $2, FALSE, FALSE, NOW(), NOW()),
          ($1, $3, FALSE, FALSE, NOW(), NOW())
-       ON CONFLICT (room_id, user_id) DO NOTHING`,
+       ON CONFLICT (room_id, user_id)
+       DO UPDATE SET
+         hidden_at = NULL,
+         updated_at = NOW()`,
       [roomId, userAId, userBId]
     );
 
