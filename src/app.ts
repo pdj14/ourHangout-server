@@ -24,6 +24,7 @@ import { PairingService } from './modules/pairing/pairing.service';
 import { pairingRoutes } from './modules/pairing/pairing.routes';
 import { ContactsService } from './modules/contacts/contacts.service';
 import { contactsRoutes } from './modules/contacts/contacts.routes';
+import { FcmPushService } from './lib/push/fcm-push.service';
 import { registerErrorHandlers } from './plugins/error-handler';
 import { securityPlugin } from './plugins/security';
 import { swaggerPlugin } from './plugins/swagger';
@@ -72,11 +73,13 @@ export async function buildServer(): Promise<FastifyInstance> {
     chatService,
     logger: app.log
   });
+  const fcmPushService = new FcmPushService(env, app.log);
 
   const socialService = new SocialService({
     db,
     connectionManager,
     clawBridge,
+    pushService: fcmPushService,
     logger: app.log
   });
 

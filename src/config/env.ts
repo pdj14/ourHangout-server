@@ -12,6 +12,11 @@ const envSchema = z.object({
   JWT_SECRET: z.string().min(32),
   GOOGLE_CLIENT_ID: z.string().default(''),
   GOOGLE_CLIENT_IDS: z.string().default(''),
+  FCM_PROJECT_ID: z.string().default(''),
+  FCM_CLIENT_EMAIL: z.string().default(''),
+  FCM_PRIVATE_KEY: z.string().default(''),
+  FCM_SERVICE_ACCOUNT_JSON: z.string().default(''),
+  FCM_ANDROID_CHANNEL_ID: z.string().default('messages'),
   ACCESS_TOKEN_TTL: z.string().default('15m'),
   REFRESH_TOKEN_TTL_DAYS: z.coerce.number().int().positive().default(14),
   CORS_ORIGINS: z.string().default('http://localhost:5173'),
@@ -77,6 +82,7 @@ function parseTrustProxy(value: string): boolean | number | string[] {
 export const env = {
   ...rawEnv,
   TRUST_PROXY: parseTrustProxy(rawEnv.TRUST_PROXY),
+  FCM_PRIVATE_KEY: rawEnv.FCM_PRIVATE_KEY.replace(/\\n/g, '\n'),
   CORS_ORIGINS: rawEnv.CORS_ORIGINS.split(',').map((origin) => origin.trim()).filter(Boolean),
   GOOGLE_CLIENT_IDS: Array.from(
     new Set(

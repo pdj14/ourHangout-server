@@ -2,6 +2,7 @@ import { randomUUID } from 'crypto';
 import type { FastifyBaseLogger } from 'fastify';
 import type { Pool, PoolClient } from 'pg';
 import { AppError, ErrorCodes } from '../../lib/errors';
+import { FcmPushService } from '../../lib/push/fcm-push.service';
 import type { ConnectionManager } from '../chat/connection-manager';
 import type { ClawBridgeService } from '../openclaw/claw-bridge.service';
 import type { MessageKind, RoomDto, RoomMessageDto, RoomType, UserProfileDto } from './social.types';
@@ -120,10 +121,17 @@ type BotRecipientRow = {
   bot_name: string;
 };
 
+type PushRecipientRow = {
+  user_id: string;
+  platform: 'android' | 'ios' | 'web';
+  push_token: string;
+};
+
 type SocialServiceDeps = {
   db: Pool;
   connectionManager: ConnectionManager;
   clawBridge: ClawBridgeService;
+  pushService: FcmPushService;
   logger: FastifyBaseLogger;
 };
 
@@ -226,12 +234,14 @@ export class SocialService {
   private readonly db: Pool;
   private readonly connectionManager: ConnectionManager;
   private readonly clawBridge: ClawBridgeService;
+  private readonly pushService: FcmPushService;
   private readonly logger: FastifyBaseLogger;
 
   constructor(deps: SocialServiceDeps) {
     this.db = deps.db;
     this.connectionManager = deps.connectionManager;
     this.clawBridge = deps.clawBridge;
+    this.pushService = deps.pushService;
     this.logger = deps.logger;
   }
 
@@ -1294,6 +1304,7 @@ export class SocialService {
 
     let finalMessage = mappedInserted;
     let delivered = false;
+    const offlineRecipientIds: string[] = [];
 
     for (const memberId of memberUserIds) {
       const sent = this.connectionManager.sendToUser(memberId, {
@@ -1306,6 +1317,9 @@ export class SocialService {
 
       if (memberId !== params.userId && sent) {
         delivered = true;
+      }
+      if (memberId !== params.userId && !sent) {
+        offlineRecipientIds.push(memberId);
       }
     }
 
@@ -1336,6 +1350,12 @@ export class SocialService {
 
     const senderIsBot = await this.isActiveBotUser(params.userId);
     if (!senderIsBot) {
+      await this.sendPushForRoomMessage({
+        room,
+        message: finalMessage,
+        targetUserIds: offlineRecipientIds
+      });
+
       const recipientIds = memberUserIds.filter((memberId) => memberId !== params.userId);
       if (recipientIds.length > 0) {
         const bots = await this.findActiveBotsByUserIds(recipientIds);
@@ -1763,6 +1783,7 @@ export class SocialService {
       }
 
       let delivered = false;
+      const offlineRecipientIds: string[] = [];
       for (const memberId of params.targetMembers) {
         const sent = this.connectionManager.sendToUser(memberId, {
           event: 'message.new',
@@ -1774,6 +1795,9 @@ export class SocialService {
 
         if (memberId !== params.botUserId && sent) {
           delivered = true;
+        }
+        if (memberId !== params.botUserId && !sent) {
+          offlineRecipientIds.push(memberId);
         }
       }
 
@@ -1796,6 +1820,12 @@ export class SocialService {
           }
         });
       }
+
+      await this.sendPushForRoomMessage({
+        room: params.room,
+        message: mapped,
+        targetUserIds: offlineRecipientIds
+      });
 
       this.emitToUsers(params.targetMembers, {
         event: 'room.updated',
@@ -2003,6 +2033,67 @@ export class SocialService {
     );
 
     return Number(result.rows[0]?.unread_count ?? 0);
+  }
+
+  private async sendPushForRoomMessage(params: {
+    room: RoomRow;
+    message: RoomMessageDto;
+    targetUserIds: string[];
+  }): Promise<void> {
+    if (!this.pushService.isEnabled()) return;
+    if (params.targetUserIds.length === 0) return;
+    if (params.message.kind === 'system') return;
+
+    const recipients = await this.getPushRecipients(params.room.id, params.targetUserIds);
+    if (recipients.length === 0) return;
+
+    const preview =
+      params.message.kind === 'text'
+        ? params.message.text?.trim() || ''
+        : params.message.kind === 'image'
+        ? 'Image'
+        : 'Video';
+    const title =
+      params.room.type === 'group'
+        ? params.room.title?.trim() || params.message.senderName
+        : params.message.senderName;
+    const body =
+      params.room.type === 'group'
+        ? `${params.message.senderName}: ${preview}`.trim()
+        : preview;
+
+    const result = await this.pushService.send({
+      tokens: recipients.map((recipient) => recipient.push_token),
+      title,
+      body,
+      data: {
+        roomId: params.room.id,
+        kind: params.message.kind
+      }
+    });
+
+    if (result.invalidTokens.length > 0) {
+      await this.db.query('DELETE FROM device_tokens WHERE push_token = ANY($1::text[])', [result.invalidTokens]);
+    }
+  }
+
+  private async getPushRecipients(roomId: string, userIds: string[]): Promise<PushRecipientRow[]> {
+    if (userIds.length === 0) return [];
+
+    const result = await this.db.query<PushRecipientRow>(
+      `SELECT dt.user_id,
+              dt.platform,
+              dt.push_token
+       FROM device_tokens dt
+       LEFT JOIN room_user_settings rus
+         ON rus.room_id = $1
+        AND rus.user_id = dt.user_id
+       WHERE dt.user_id = ANY($2::uuid[])
+         AND COALESCE(rus.muted, FALSE) = FALSE`,
+      [roomId, userIds]
+    );
+
+    return result.rows;
   }
 
   private async assertRoomMembership(roomId: string, userId: string, client?: PoolClient): Promise<RoomRow> {
