@@ -35,7 +35,10 @@ const connectorToken = process.env.OPENCLAW_CONNECTOR_TOKEN ?? '';
 const connectorId = process.env.CONNECTOR_ID ?? `connector-local-${Date.now()}`;
 const botKeys = process.env.CONNECTOR_BOT_KEYS ?? '*';
 const mode = (process.env.CONNECTOR_MODE ?? 'mock').toLowerCase();
-const localOpenClawBaseUrl = process.env.OPENCLAW_LOCAL_BASE_URL ?? 'http://127.0.0.1:18888';
+const localOpenClawBaseUrl = process.env.OPENCLAW_LOCAL_BASE_URL ?? 'http://127.0.0.1:18789';
+const localOpenClawApiToken = process.env.OPENCLAW_LOCAL_API_TOKEN ?? '';
+const localOpenClawModel = process.env.OPENCLAW_LOCAL_MODEL ?? 'openclaw:main';
+const localOpenClawSessionScope = (process.env.OPENCLAW_LOCAL_SESSION_SCOPE ?? 'room').toLowerCase();
 const reconnectDelayMs = Number(process.env.CONNECTOR_RECONNECT_MS ?? 3000);
 const timeoutMs = Number(process.env.CONNECTOR_REQUEST_TIMEOUT_MS ?? 4000);
 
@@ -55,19 +58,57 @@ const query = `token=${encodeURIComponent(connectorToken)}&connectorId=${encodeU
 }`;
 const wsUrl = `${hubWsBase}${hubWsBase.includes('?') ? '&' : '?'}${query}`;
 
-async function callLocalOpenClaw(content: string, botKey?: string): Promise<{ providerMessageId?: string; replyText?: string; raw?: unknown }> {
+function resolveSessionKey(payload: RequestPayload['data']): string {
+  if (localOpenClawSessionScope === 'user') {
+    return `ourhangout:user:${payload.senderId}:bot:${payload.botKey ?? 'default'}`;
+  }
+  return `ourhangout:room:${payload.roomId}:bot:${payload.botKey ?? 'default'}`;
+}
+
+function extractReplyText(raw: unknown): string | undefined {
+  if (!isRecord(raw)) return undefined;
+  if (typeof raw.replyText === 'string' && raw.replyText.trim().length > 0) {
+    return raw.replyText.trim();
+  }
+  if (typeof raw.output_text === 'string' && raw.output_text.trim().length > 0) {
+    return raw.output_text.trim();
+  }
+  const output = Array.isArray(raw.output) ? raw.output : [];
+  const chunks: string[] = [];
+  for (const item of output) {
+    if (!isRecord(item)) continue;
+    const content = Array.isArray(item.content) ? item.content : [];
+    for (const part of content) {
+      if (!isRecord(part)) continue;
+      if (typeof part.text === 'string' && part.text.trim().length > 0) {
+        chunks.push(part.text.trim());
+      }
+    }
+  }
+  return chunks.length > 0 ? chunks.join('\n\n') : undefined;
+}
+
+async function callLocalOpenClaw(payload: RequestPayload['data']): Promise<{ providerMessageId?: string; replyText?: string; raw?: unknown }> {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
 
   try {
-    const response = await fetch(`${localOpenClawBaseUrl.replace(/\/+$/, '')}/v1/messages`, {
+    const headers: Record<string, string> = {
+      'content-type': 'application/json'
+    };
+    if (localOpenClawApiToken.trim()) {
+      headers.Authorization = `Bearer ${localOpenClawApiToken.trim()}`;
+    }
+
+    const response = await fetch(`${localOpenClawBaseUrl.replace(/\/+$/, '')}/v1/responses`, {
       method: 'POST',
-      headers: {
-        'content-type': 'application/json'
-      },
+      headers,
       body: JSON.stringify({
-        content,
-        botKey
+        model: localOpenClawModel,
+        input: payload.content,
+        session: {
+          key: resolveSessionKey(payload)
+        }
       }),
       signal: controller.signal
     });
@@ -86,8 +127,13 @@ async function callLocalOpenClaw(content: string, botKey?: string): Promise<{ pr
 
     const parsedObj = isRecord(parsed) ? parsed : {};
     return {
-      providerMessageId: typeof parsedObj.providerMessageId === 'string' ? parsedObj.providerMessageId : undefined,
-      replyText: typeof parsedObj.replyText === 'string' ? parsedObj.replyText : undefined,
+      providerMessageId:
+        typeof parsedObj.providerMessageId === 'string'
+          ? parsedObj.providerMessageId
+          : typeof parsedObj.id === 'string'
+          ? parsedObj.id
+          : undefined,
+      replyText: extractReplyText(parsed),
       raw: parsed
     };
   } finally {
@@ -100,7 +146,7 @@ async function handleRequest(payload: RequestPayload): Promise<ResponsePayload> 
 
   try {
     if (mode === 'http') {
-      const result = await callLocalOpenClaw(content, botKey);
+      const result = await callLocalOpenClaw(payload.data);
       return {
         event: 'openclaw.response',
         data: {
