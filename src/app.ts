@@ -68,6 +68,11 @@ export async function buildServer(): Promise<FastifyInstance> {
     clawBridge,
     logger: app.log
   });
+  const botService = new BotService({
+    db,
+    chatService,
+    logger: app.log
+  });
   const fcmPushService = new FcmPushService(env, app.log);
 
   const socialService = new SocialService({
@@ -75,11 +80,6 @@ export async function buildServer(): Promise<FastifyInstance> {
     connectionManager,
     clawBridge,
     pushService: fcmPushService,
-    logger: app.log
-  });
-  const botService = new BotService({
-    db,
-    socialService,
     logger: app.log
   });
 

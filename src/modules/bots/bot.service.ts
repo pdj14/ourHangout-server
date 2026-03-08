@@ -1,6 +1,6 @@
 import type { FastifyBaseLogger } from 'fastify';
 import type { Pool } from 'pg';
-import type { SocialService } from '../social/social.service';
+import type { ChatService } from '../chat/chat.service';
 import type { BotRoomResult, BotSummary } from './bot.types';
 import { AppError, ErrorCodes } from '../../lib/errors';
 
@@ -17,7 +17,7 @@ type BotRow = {
 
 type BotServiceDeps = {
   db: Pool;
-  socialService: SocialService;
+  chatService: ChatService;
   logger: FastifyBaseLogger;
 };
 
@@ -31,12 +31,12 @@ const DEFAULT_OPENCLAW_BOT = {
 
 export class BotService {
   private readonly db: Pool;
-  private readonly socialService: SocialService;
+  private readonly chatService: ChatService;
   private readonly logger: FastifyBaseLogger;
 
   constructor(deps: BotServiceDeps) {
     this.db = deps.db;
-    this.socialService = deps.socialService;
+    this.chatService = deps.chatService;
     this.logger = deps.logger;
   }
 
@@ -121,7 +121,7 @@ export class BotService {
       throw new AppError(409, ErrorCodes.CONFLICT, 'Cannot create bot room with the bot account itself.');
     }
 
-    const room = await this.socialService.createOrGetDirectRoom(userId, bot.user_id);
+    const room = await this.chatService.createDirectRoom(userId, bot.user_id);
 
     return {
       bot: this.mapBot(bot),
