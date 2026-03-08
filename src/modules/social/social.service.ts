@@ -638,14 +638,26 @@ export class SocialService {
       [userId, targetUserId]
     );
 
-    this.emitToUsers([targetUserId], {
+    const realtimePayload = {
       event: 'friend.updated',
       data: {
         type: 'request.incoming',
         fromUserId: userId,
         requestId: inserted.rows[0].id
       }
-    });
+    };
+    const delivered = this.connectionManager.sendToUser(targetUserId, realtimePayload);
+    if (!delivered) {
+      await this.sendPushToUsers({
+        userIds: [targetUserId],
+        title: 'New friend request',
+        body: 'Someone sent you a friend request.',
+        data: {
+          type: 'friend.request',
+          requestId: inserted.rows[0].id
+        }
+      });
+    }
 
     return {
       requestId: inserted.rows[0].id,
@@ -702,21 +714,37 @@ export class SocialService {
 
       await client.query('COMMIT');
 
-      this.emitToUsers([request.requester_id, request.target_id], {
+      const friendPayload = {
         event: 'friend.updated',
         data: {
           type: 'accepted',
           requestId,
           roomId
         }
-      });
+      };
+      const requesterDelivered = this.connectionManager.sendToUser(request.requester_id, friendPayload);
+      this.connectionManager.sendToUser(request.target_id, friendPayload);
 
-      this.emitToUsers([request.requester_id, request.target_id], {
+      const roomPayload = {
         event: 'room.updated',
         data: {
           roomId
         }
-      });
+      };
+      this.connectionManager.sendToUser(request.requester_id, roomPayload);
+      this.connectionManager.sendToUser(request.target_id, roomPayload);
+      if (!requesterDelivered) {
+        await this.sendPushToUsers({
+          userIds: [request.requester_id],
+          title: 'Friend request accepted',
+          body: 'Your friend request was accepted.',
+          data: {
+            type: 'friend.accepted',
+            requestId,
+            roomId
+          }
+        });
+      }
 
       return {
         requestId,
@@ -749,13 +777,24 @@ export class SocialService {
       throw new AppError(404, ErrorCodes.RESOURCE_NOT_FOUND, 'Pending friend request not found.');
     }
 
-    this.emitToUsers([row.requester_id], {
+    const delivered = this.connectionManager.sendToUser(row.requester_id, {
       event: 'friend.updated',
       data: {
         type: 'rejected',
         requestId
       }
     });
+    if (!delivered) {
+      await this.sendPushToUsers({
+        userIds: [row.requester_id],
+        title: 'Friend request declined',
+        body: 'Your friend request was declined.',
+        data: {
+          type: 'friend.rejected',
+          requestId
+        }
+      });
+    }
 
     return {
       requestId,
@@ -2173,6 +2212,39 @@ export class SocialService {
         roomId: params.room.id,
         kind: params.message.kind
       }
+    });
+
+    if (result.invalidTokens.length > 0) {
+      await this.db.query('DELETE FROM device_tokens WHERE push_token = ANY($1::text[])', [result.invalidTokens]);
+    }
+  }
+
+  private async sendPushToUsers(params: {
+    userIds: string[];
+    title: string;
+    body: string;
+    data?: Record<string, string>;
+  }): Promise<void> {
+    if (!this.pushService.isEnabled()) return;
+
+    const uniqueUserIds = Array.from(new Set(params.userIds.map((userId) => userId.trim()).filter(Boolean)));
+    if (uniqueUserIds.length === 0) return;
+
+    const recipients = await this.db.query<{ push_token: string }>(
+      `SELECT DISTINCT push_token
+       FROM device_tokens
+       WHERE user_id = ANY($1::uuid[])`,
+      [uniqueUserIds]
+    );
+
+    const tokens = recipients.rows.map((row) => row.push_token).filter(Boolean);
+    if (tokens.length === 0) return;
+
+    const result = await this.pushService.send({
+      tokens,
+      title: params.title,
+      body: params.body,
+      data: params.data
     });
 
     if (result.invalidTokens.length > 0) {
