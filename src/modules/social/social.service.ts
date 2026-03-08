@@ -1218,14 +1218,19 @@ export class SocialService {
        LEFT JOIN LATERAL (
          SELECT COUNT(*) FILTER (
                   WHERE m.sender_id IS NOT NULL
-                    AND (rus.last_read_at IS NULL OR rus.last_read_at < m.created_at)
+                    AND NOT (
+                      rus.last_read_message_id = m.id OR
+                      (rus.last_read_at IS NOT NULL AND rus.last_read_at >= m.created_at)
+                    )
                 )::int AS unread_count,
                 COALESCE(
                   array_agg(COALESCE(NULLIF(trim(ru.display_name), ''), ru.email) ORDER BY COALESCE(NULLIF(trim(ru.display_name), ''), ru.email))
                     FILTER (
                       WHERE m.sender_id IS NOT NULL
-                        AND rus.last_read_at IS NOT NULL
-                        AND rus.last_read_at >= m.created_at
+                        AND (
+                          rus.last_read_message_id = m.id OR
+                          (rus.last_read_at IS NOT NULL AND rus.last_read_at >= m.created_at)
+                        )
                     ),
                   ARRAY[]::text[]
                 ) AS read_by_names
@@ -1932,14 +1937,19 @@ export class SocialService {
        LEFT JOIN LATERAL (
          SELECT COUNT(*) FILTER (
                   WHERE m.sender_id IS NOT NULL
-                    AND (rus.last_read_at IS NULL OR rus.last_read_at < m.created_at)
+                    AND NOT (
+                      rus.last_read_message_id = m.id OR
+                      (rus.last_read_at IS NOT NULL AND rus.last_read_at >= m.created_at)
+                    )
                 )::int AS unread_count,
                 COALESCE(
                   array_agg(COALESCE(NULLIF(trim(ru.display_name), ''), ru.email) ORDER BY COALESCE(NULLIF(trim(ru.display_name), ''), ru.email))
                     FILTER (
                       WHERE m.sender_id IS NOT NULL
-                        AND rus.last_read_at IS NOT NULL
-                        AND rus.last_read_at >= m.created_at
+                        AND (
+                          rus.last_read_message_id = m.id OR
+                          (rus.last_read_at IS NOT NULL AND rus.last_read_at >= m.created_at)
+                        )
                     ),
                   ARRAY[]::text[]
                 ) AS read_by_names
