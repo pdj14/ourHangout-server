@@ -949,11 +949,6 @@ export class SocialService {
          AND mem.left_at IS NULL
          AND r.deleted_at IS NULL
          AND (
-           r.type <> 'direct' OR
-           rus.hidden_at IS NULL OR
-           r.updated_at > rus.hidden_at
-         )
-         AND (
            $2::timestamptz IS NULL OR
            r.updated_at < $2 OR
            (r.updated_at = $2 AND r.id < $3::uuid)
