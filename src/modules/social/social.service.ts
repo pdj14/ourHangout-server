@@ -18,6 +18,7 @@ type UserProfileRow = {
   display_name: string | null;
   status_message: string | null;
   avatar_url: string | null;
+  locale: string | null;
 };
 
 type FriendRow = {
@@ -127,6 +128,7 @@ type PushRecipientRow = {
   user_id: string;
   platform: 'android' | 'ios' | 'web';
   push_token: string;
+  locale: string | null;
 };
 
 type SocialServiceDeps = {
@@ -142,6 +144,48 @@ function normalizeName(displayName: string | null, email: string): string {
     return displayName.trim();
   }
   return email;
+}
+
+function normalizeLocaleTag(locale?: string | null): 'ko-KR' | 'en-US' {
+  const value = (locale || '').trim().toLowerCase();
+  return value.startsWith('ko') ? 'ko-KR' : 'en-US';
+}
+
+function isKoreanLocale(locale?: string | null): boolean {
+  return normalizeLocaleTag(locale) === 'ko-KR';
+}
+
+function getPushMessagePreview(kind: MessageKind, text: string | undefined, locale?: string | null): string {
+  if (kind === 'text') return text?.trim() || '';
+  if (kind === 'image') return isKoreanLocale(locale) ? '사진' : 'Image';
+  if (kind === 'video') return isKoreanLocale(locale) ? '동영상' : 'Video';
+  return text?.trim() || '';
+}
+
+function getFriendPushCopy(
+  type: 'request' | 'accepted' | 'rejected',
+  locale?: string | null
+): { title: string; body: string } {
+  if (isKoreanLocale(locale)) {
+    if (type === 'request') {
+      return { title: '친구 요청이 도착했어요', body: '친구 탭에서 요청을 확인해 보세요.' };
+    }
+    if (type === 'accepted') {
+      return { title: '친구 요청이 수락되었어요', body: '이제 바로 대화를 시작할 수 있어요.' };
+    }
+    return { title: '친구 요청이 거절되었어요', body: '친구 탭에서 상태를 확인해 보세요.' };
+  }
+  if (type === 'request') {
+    return { title: 'New friend request', body: 'Check the request in your Friends tab.' };
+  }
+  if (type === 'accepted') {
+    return { title: 'Friend request accepted', body: 'You can start chatting right away.' };
+  }
+  return { title: 'Friend request declined', body: 'Check the status in your Friends tab.' };
+}
+
+function makeSystemMessageToken(type: 'member_left', displayName: string): string {
+  return `__sys__:${type}:${encodeURIComponent(displayName)}`;
 }
 
 function encodeCursor(input: CursorInput): string {
@@ -258,29 +302,33 @@ export class SocialService {
       name?: string;
       status?: string;
       avatarUri?: string;
+      locale?: string;
     }
   ): Promise<UserProfileDto> {
     const hasName = input.name !== undefined;
     const hasStatus = input.status !== undefined;
     const hasAvatar = input.avatarUri !== undefined;
+    const hasLocale = input.locale !== undefined;
 
-    if (!hasName && !hasStatus && !hasAvatar) {
+    if (!hasName && !hasStatus && !hasAvatar && !hasLocale) {
       return this.getMeProfile(userId);
     }
 
     const nameValue = hasName ? (input.name?.trim() || null) : null;
     const statusValue = hasStatus ? (input.status?.trim() || null) : null;
     const avatarValue = hasAvatar ? (input.avatarUri?.trim() || null) : null;
+    const localeValue = hasLocale ? normalizeLocaleTag(input.locale) : null;
 
     const updated = await this.db.query<UserProfileRow>(
       `UPDATE users
        SET display_name = CASE WHEN $2::boolean THEN $3 ELSE display_name END,
            status_message = CASE WHEN $4::boolean THEN $5 ELSE status_message END,
            avatar_url = CASE WHEN $6::boolean THEN $7 ELSE avatar_url END,
+           locale = CASE WHEN $8::boolean THEN $9 ELSE locale END,
            updated_at = NOW()
        WHERE id = $1
-       RETURNING id, email, display_name, status_message, avatar_url`,
-      [userId, hasName, nameValue, hasStatus, statusValue, hasAvatar, avatarValue]
+       RETURNING id, email, display_name, status_message, avatar_url, locale`,
+      [userId, hasName, nameValue, hasStatus, statusValue, hasAvatar, avatarValue, hasLocale, localeValue]
     );
 
     const row = updated.rows[0];
@@ -650,8 +698,7 @@ export class SocialService {
     if (!delivered) {
       await this.sendPushToUsers({
         userIds: [targetUserId],
-        title: 'New friend request',
-        body: 'Someone sent you a friend request.',
+        resolveCopy: (locale) => getFriendPushCopy('request', locale),
         data: {
           type: 'friend.request',
           requestId: inserted.rows[0].id
@@ -736,8 +783,7 @@ export class SocialService {
       if (!requesterDelivered) {
         await this.sendPushToUsers({
           userIds: [request.requester_id],
-          title: 'Friend request accepted',
-          body: 'Your friend request was accepted.',
+          resolveCopy: (locale) => getFriendPushCopy('accepted', locale),
           data: {
             type: 'friend.accepted',
             requestId,
@@ -787,8 +833,7 @@ export class SocialService {
     if (!delivered) {
       await this.sendPushToUsers({
         userIds: [row.requester_id],
-        title: 'Friend request declined',
-        body: 'Your friend request was declined.',
+        resolveCopy: (locale) => getFriendPushCopy('rejected', locale),
         data: {
           type: 'friend.rejected',
           requestId
@@ -1111,7 +1156,7 @@ export class SocialService {
     }
 
     const profile = await this.getUserProfileRow(userId);
-    const leaveText = `${normalizeName(profile.display_name, profile.email)} left the room.`;
+    const leaveText = makeSystemMessageToken('member_left', normalizeName(profile.display_name, profile.email));
 
     await this.db.query(
       `UPDATE room_members
@@ -1156,7 +1201,7 @@ export class SocialService {
 
     if (room.type === 'direct') {
       const profile = await this.getUserProfileRow(userId);
-      const leaveText = `${normalizeName(profile.display_name, profile.email)} left the room.`;
+      const leaveText = makeSystemMessageToken('member_left', normalizeName(profile.display_name, profile.email));
 
       await this.db.query(
         `UPDATE room_members
@@ -2189,40 +2234,44 @@ export class SocialService {
     const recipients = await this.getPushRecipients(params.room.id, params.targetUserIds);
     if (recipients.length === 0) return;
 
-    const preview =
-      params.message.kind === 'text'
-        ? params.message.text?.trim() || ''
-        : params.message.kind === 'image'
-        ? 'Image'
-        : 'Video';
-    const title =
-      params.room.type === 'group'
-        ? params.room.title?.trim() || params.message.senderName
-        : params.message.senderName;
-    const body =
-      params.room.type === 'group'
-        ? `${params.message.senderName}: ${preview}`.trim()
-        : preview;
+    const recipientsByLocale = new Map<string, PushRecipientRow[]>();
+    for (const recipient of recipients) {
+      const locale = normalizeLocaleTag(recipient.locale);
+      const existing = recipientsByLocale.get(locale) ?? [];
+      existing.push(recipient);
+      recipientsByLocale.set(locale, existing);
+    }
 
-    const result = await this.pushService.send({
-      tokens: recipients.map((recipient) => recipient.push_token),
-      title,
-      body,
-      data: {
-        roomId: params.room.id,
-        kind: params.message.kind
+    for (const [locale, localeRecipients] of recipientsByLocale.entries()) {
+      const preview = getPushMessagePreview(params.message.kind, params.message.text, locale);
+      const title =
+        params.room.type === 'group'
+          ? params.room.title?.trim() || params.message.senderName
+          : params.message.senderName;
+      const body =
+        params.room.type === 'group'
+          ? `${params.message.senderName}: ${preview}`.trim()
+          : preview;
+
+      const result = await this.pushService.send({
+        tokens: localeRecipients.map((recipient) => recipient.push_token),
+        title,
+        body,
+        data: {
+          roomId: params.room.id,
+          kind: params.message.kind
+        }
+      });
+
+      if (result.invalidTokens.length > 0) {
+        await this.db.query('DELETE FROM device_tokens WHERE push_token = ANY($1::text[])', [result.invalidTokens]);
       }
-    });
-
-    if (result.invalidTokens.length > 0) {
-      await this.db.query('DELETE FROM device_tokens WHERE push_token = ANY($1::text[])', [result.invalidTokens]);
     }
   }
 
   private async sendPushToUsers(params: {
     userIds: string[];
-    title: string;
-    body: string;
+    resolveCopy: (locale: string | null) => { title: string; body: string };
     data?: Record<string, string>;
   }): Promise<void> {
     if (!this.pushService.isEnabled()) return;
@@ -2230,25 +2279,37 @@ export class SocialService {
     const uniqueUserIds = Array.from(new Set(params.userIds.map((userId) => userId.trim()).filter(Boolean)));
     if (uniqueUserIds.length === 0) return;
 
-    const recipients = await this.db.query<{ push_token: string }>(
-      `SELECT DISTINCT push_token
-       FROM device_tokens
+    const recipients = await this.db.query<{ push_token: string; locale: string | null }>(
+      `SELECT DISTINCT dt.push_token,
+                       u.locale
+       FROM device_tokens dt
+       INNER JOIN users u ON u.id = dt.user_id
        WHERE user_id = ANY($1::uuid[])`,
       [uniqueUserIds]
     );
 
-    const tokens = recipients.rows.map((row) => row.push_token).filter(Boolean);
-    if (tokens.length === 0) return;
+    const recipientsByLocale = new Map<string, string[]>();
+    for (const row of recipients.rows) {
+      const token = row.push_token?.trim();
+      if (!token) continue;
+      const locale = normalizeLocaleTag(row.locale);
+      const existing = recipientsByLocale.get(locale) ?? [];
+      existing.push(token);
+      recipientsByLocale.set(locale, existing);
+    }
 
-    const result = await this.pushService.send({
-      tokens,
-      title: params.title,
-      body: params.body,
-      data: params.data
-    });
+    for (const [locale, tokens] of recipientsByLocale.entries()) {
+      const copy = params.resolveCopy(locale);
+      const result = await this.pushService.send({
+        tokens,
+        title: copy.title,
+        body: copy.body,
+        data: params.data
+      });
 
-    if (result.invalidTokens.length > 0) {
-      await this.db.query('DELETE FROM device_tokens WHERE push_token = ANY($1::text[])', [result.invalidTokens]);
+      if (result.invalidTokens.length > 0) {
+        await this.db.query('DELETE FROM device_tokens WHERE push_token = ANY($1::text[])', [result.invalidTokens]);
+      }
     }
   }
 
@@ -2258,8 +2319,10 @@ export class SocialService {
     const result = await this.db.query<PushRecipientRow>(
       `SELECT dt.user_id,
               dt.platform,
-              dt.push_token
+              dt.push_token,
+              u.locale
        FROM device_tokens dt
+       INNER JOIN users u ON u.id = dt.user_id
        LEFT JOIN room_user_settings rus
          ON rus.room_id = $1
         AND rus.user_id = dt.user_id
@@ -2314,7 +2377,7 @@ export class SocialService {
 
   private async getUserProfileRow(userId: string): Promise<UserProfileRow> {
     const result = await this.db.query<UserProfileRow>(
-      `SELECT id, email, display_name, status_message, avatar_url
+      `SELECT id, email, display_name, status_message, avatar_url, locale
        FROM users
        WHERE id = $1
        LIMIT 1`,
@@ -2353,7 +2416,8 @@ export class SocialService {
       name: normalizeName(row.display_name, row.email),
       ...(row.status_message ? { status: row.status_message } : {}),
       email: row.email,
-      ...(row.avatar_url ? { avatarUri: row.avatar_url } : {})
+      ...(row.avatar_url ? { avatarUri: row.avatar_url } : {}),
+      locale: normalizeLocaleTag(row.locale)
     };
   }
 

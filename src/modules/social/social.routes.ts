@@ -29,13 +29,14 @@ export async function socialRoutes(app: FastifyInstance): Promise<void> {
           properties: {
             name: { type: 'string', minLength: 1, maxLength: 100 },
             status: { type: 'string', minLength: 1, maxLength: 200 },
-            avatarUri: { type: 'string', maxLength: 1024 }
+            avatarUri: { type: 'string', maxLength: 1024 },
+            locale: { type: 'string', minLength: 2, maxLength: 16 }
           }
         }
       }
     },
     async (request) => {
-      const body = (request.body as { name?: string; status?: string; avatarUri?: string } | undefined) ?? {};
+      const body = (request.body as { name?: string; status?: string; avatarUri?: string; locale?: string } | undefined) ?? {};
       const data = await app.socialService.updateMeProfile(request.user.sub, body);
       return { success: true, data };
     }

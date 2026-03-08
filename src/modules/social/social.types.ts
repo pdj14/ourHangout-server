@@ -8,6 +8,7 @@ export interface UserProfileDto {
   status?: string;
   email: string;
   avatarUri?: string;
+  locale?: string;
 }
 
 export interface FriendDto {
