@@ -24,7 +24,9 @@ export const securityPlugin = fp(async (app) => {
         return;
       }
 
-      callback(new Error('Origin is not allowed by CORS policy.'), false);
+      // Returning false disables CORS headers for that origin without turning the request into a 500.
+      // This matters for same-origin module script requests that still send an Origin header.
+      callback(null, false);
     }
   });
 
