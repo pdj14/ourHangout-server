@@ -44,6 +44,11 @@ type CountRow = {
   count: number;
 };
 
+type GuardianAccessRow = {
+  role: UserRole;
+  email: string;
+};
+
 type TopStorageUserRow = {
   id: string;
   email: string;
@@ -1717,8 +1722,9 @@ export class GuardianService {
   }
 
   private async assertParentRole(userId: string): Promise<void> {
-    const result = await this.db.query<{ role: UserRole }>(
-      `SELECT role
+    const result = await this.db.query<GuardianAccessRow>(
+      `SELECT role,
+              email
        FROM users
        WHERE id = $1
        LIMIT 1`,
@@ -1730,8 +1736,15 @@ export class GuardianService {
       throw new AppError(404, ErrorCodes.RESOURCE_NOT_FOUND, 'User not found.');
     }
 
-    if (row.role !== 'parent') {
-      throw new AppError(403, ErrorCodes.FORBIDDEN, 'Only parent accounts can access Guardian Console.');
+    const normalizedEmail = row.email.trim().toLowerCase();
+    const isGuardianMaster = env.GUARDIAN_MASTER_EMAILS.includes(normalizedEmail);
+
+    if (row.role !== 'parent' && !isGuardianMaster) {
+      throw new AppError(
+        403,
+        ErrorCodes.FORBIDDEN,
+        'Only parent accounts or configured guardian master accounts can access Guardian Console.'
+      );
     }
   }
 }

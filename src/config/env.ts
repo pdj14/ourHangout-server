@@ -21,6 +21,7 @@ const envSchema = z.object({
   FCM_ANDROID_CHANNEL_ID: z.string().default('messages'),
   ACCESS_TOKEN_TTL: z.string().default('15m'),
   REFRESH_TOKEN_TTL_DAYS: z.coerce.number().int().positive().default(14),
+  GUARDIAN_MASTER_EMAILS: z.string().default('dj14.park@gmail.com'),
   CORS_ORIGINS: z.string().default('http://localhost:5173'),
   RATE_LIMIT_MAX: z.coerce.number().int().positive().default(200),
   RATE_LIMIT_WINDOW: z.string().default('1 minute'),
@@ -87,6 +88,10 @@ export const env = {
   TRUST_PROXY: parseTrustProxy(rawEnv.TRUST_PROXY),
   FCM_PRIVATE_KEY: rawEnv.FCM_PRIVATE_KEY.replace(/\\n/g, '\n'),
   CORS_ORIGINS: rawEnv.CORS_ORIGINS.split(',').map((origin) => origin.trim()).filter(Boolean),
+  GUARDIAN_MASTER_EMAILS: rawEnv.GUARDIAN_MASTER_EMAILS
+    .split(',')
+    .map((email) => email.trim().toLowerCase())
+    .filter(Boolean),
   GOOGLE_CLIENT_IDS: Array.from(
     new Set(
       [

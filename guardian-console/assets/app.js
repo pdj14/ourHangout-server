@@ -1,4 +1,8 @@
 const app = document.getElementById('app')
+const runtimeConfig = window.__GUARDIAN_CONFIG__ || {
+  googleClientId: '',
+  guardianMasterEmails: []
+}
 
 const TAB_META = {
   dashboard: {
@@ -45,6 +49,7 @@ const state = {
   storageAssets: [],
   editDraft: null,
   bulkDeletePreview: null,
+  googleButtonReady: false,
   filters: {
     users: {
       q: '',
@@ -72,6 +77,18 @@ const state = {
       limit: 80
     }
   }
+}
+
+function getMasterEmailLabel() {
+  return runtimeConfig.guardianMasterEmails?.[0] || 'dj14.park@gmail.com'
+}
+
+function hasGoogleClientConfig() {
+  return !!runtimeConfig.googleClientId
+}
+
+function hasGoogleIdentityApi() {
+  return !!window.google?.accounts?.id
 }
 
 function loadSession() {
@@ -263,6 +280,29 @@ async function login(email, password) {
   }
 }
 
+async function loginWithGoogle(idToken) {
+  state.loading.auth = true
+  render()
+
+  try {
+    const data = await apiRequest('/v1/auth/google', {
+      method: 'POST',
+      body: { idToken }
+    })
+
+    saveSession({
+      accessToken: data.tokens.accessToken,
+      refreshToken: data.tokens.refreshToken
+    })
+    state.user = data.user
+    clearFlash()
+    await loadAllData()
+  } finally {
+    state.loading.auth = false
+    render()
+  }
+}
+
 async function fetchMe() {
   return apiRequest('/v1/auth/me')
 }
@@ -432,15 +472,75 @@ function renderKpi(label, value, sub) {
   `
 }
 
+function scheduleGoogleButtonRender() {
+  if (state.session || !hasGoogleClientConfig()) {
+    state.googleButtonReady = false
+    return
+  }
+
+  const renderGoogleButton = () => {
+    const container = document.getElementById('google-signin-area')
+    if (!container || state.session) return
+
+    if (!hasGoogleIdentityApi()) {
+      window.setTimeout(renderGoogleButton, 250)
+      return
+    }
+
+    container.innerHTML = ''
+    window.google.accounts.id.initialize({
+      client_id: runtimeConfig.googleClientId,
+      callback: async (response) => {
+        if (!response?.credential) {
+          setFlash('error', 'Google sign-in did not return an ID token.')
+          return
+        }
+
+        try {
+          await loginWithGoogle(response.credential)
+        } catch (error) {
+          setFlash('error', error.message || 'Google sign-in failed.')
+        }
+      }
+    })
+
+    window.google.accounts.id.renderButton(container, {
+      theme: 'outline',
+      size: 'large',
+      shape: 'pill',
+      text: 'continue_with',
+      width: 320
+    })
+
+    state.googleButtonReady = true
+  }
+
+  window.setTimeout(renderGoogleButton, 0)
+}
+
 function renderLogin() {
   return `
     <div class="login-wrap">
       <section class="login-card">
         <span class="hero-kicker">Parent Access Only</span>
         <h1>Guardian Console</h1>
-        <p>Sign in with an existing parent account. This console is connected to message review, test-message cleanup, user management, and storage inspection.</p>
+        <p>Use Google sign-in for the master guardian account. The configured master address is ${escapeHtml(getMasterEmailLabel())}.</p>
         ${renderFlash()}
-        <form id="login-form" class="section-stack">
+        <div class="section-stack">
+          <div class="field">
+            <label>Google Sign-In</label>
+            ${
+              hasGoogleClientConfig()
+                ? `<div id="google-signin-area"></div>`
+                : `<div class="empty-state">Google web client ID is not configured on this server yet.</div>`
+            }
+          </div>
+        </div>
+        <form id="login-form" class="section-stack" style="margin-top:18px">
+          <div class="field">
+            <label>Fallback Email Login</label>
+            <div class="muted">Keep this only as a fallback path while Google login is being used.</div>
+          </div>
           <div class="field">
             <label for="login-email">Email</label>
             <input class="input" id="login-email" name="email" type="email" autocomplete="username" required />
@@ -455,7 +555,7 @@ function renderLogin() {
             </button>
           </div>
         </form>
-        <div class="footer-note">This page uses /v1/auth/login and /v1/guardian/*. Access is restricted to parent-role accounts.</div>
+        <div class="footer-note">This page uses /v1/auth/google, /v1/auth/login, and /v1/guardian/*. Access is restricted to parent-role accounts and configured guardian master accounts.</div>
       </section>
     </div>
   `
@@ -1185,6 +1285,10 @@ function renderConsole() {
 
 function render() {
   app.innerHTML = state.session ? renderConsole() : renderLogin()
+
+  if (!state.session) {
+    scheduleGoogleButtonRender()
+  }
 }
 
 function startEditUser(userId) {
