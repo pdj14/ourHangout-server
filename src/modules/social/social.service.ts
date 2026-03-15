@@ -31,6 +31,7 @@ type FriendRow = {
   created_at: Date;
   friend_name: string | null;
   friend_status: string | null;
+  friend_avatar_url: string | null;
   friend_email: string;
 };
 
@@ -384,6 +385,17 @@ export class SocialService {
       throw new AppError(404, ErrorCodes.RESOURCE_NOT_FOUND, 'User not found.');
     }
 
+    const friendIds = await this.getFriendUserIds(userId);
+    if (friendIds.length > 0) {
+      this.emitToUsers(friendIds, {
+        event: 'friend.updated',
+        data: {
+          type: 'profile',
+          peerUserId: userId
+        }
+      });
+    }
+
     return this.mapProfile(row);
   }
 
@@ -580,6 +592,7 @@ export class SocialService {
       id: string;
       name: string;
       status?: string;
+      avatarUri?: string;
       trusted: boolean;
     }>;
     nextCursor?: string;
@@ -594,6 +607,7 @@ export class SocialService {
               f.created_at,
               u.display_name AS friend_name,
               u.status_message AS friend_status,
+              u.avatar_url AS friend_avatar_url,
               u.email AS friend_email
        FROM friendships f
        INNER JOIN users u ON u.id = f.friend_user_id
@@ -615,6 +629,7 @@ export class SocialService {
       id: row.friend_user_id,
       name: normalizeName(row.friend_name, row.friend_email),
       ...(row.friend_status ? { status: row.friend_status } : {}),
+      ...(row.friend_avatar_url ? { avatarUri: row.friend_avatar_url } : {}),
       trusted: row.trusted
     }));
 
@@ -1240,9 +1255,10 @@ export class SocialService {
     input: {
       favorite?: boolean;
       muted?: boolean;
+      title?: string;
     }
-  ): Promise<{ favorite: boolean; muted: boolean }> {
-    await this.assertRoomMembership(roomId, userId);
+  ): Promise<{ favorite: boolean; muted: boolean; title?: string }> {
+    const room = await this.assertRoomMembership(roomId, userId);
 
     await this.db.query(
       `INSERT INTO room_user_settings (room_id, user_id, favorite, muted, created_at, updated_at)
@@ -1253,6 +1269,15 @@ export class SocialService {
 
     const hasFavorite = input.favorite !== undefined;
     const hasMuted = input.muted !== undefined;
+    const hasTitle = input.title !== undefined;
+    const nextTitle = hasTitle ? (input.title?.trim() || '') : '';
+
+    if (hasTitle && room.type !== 'group') {
+      throw new AppError(409, ErrorCodes.CONFLICT, 'Only group room title can be changed.');
+    }
+    if (hasTitle && (nextTitle.length < 1 || nextTitle.length > 100)) {
+      throw new AppError(400, ErrorCodes.VALIDATION_ERROR, 'Group title must be 1-100 characters.');
+    }
 
     const result = await this.db.query<{ favorite: boolean; muted: boolean }>(
       `UPDATE room_user_settings
@@ -1270,7 +1295,18 @@ export class SocialService {
       throw new AppError(404, ErrorCodes.RESOURCE_NOT_FOUND, 'Room settings not found.');
     }
 
-    this.emitToUsers([userId], {
+    if (hasTitle) {
+      await this.db.query(
+        `UPDATE rooms
+         SET title = $2,
+             updated_at = NOW()
+         WHERE id = $1`,
+        [roomId, nextTitle]
+      );
+    }
+
+    const notifyTargets = hasTitle ? await this.getActiveRoomMemberIds(roomId) : [userId];
+    this.emitToUsers(notifyTargets, {
       event: 'room.updated',
       data: {
         roomId
@@ -1279,7 +1315,8 @@ export class SocialService {
 
     return {
       favorite: row.favorite,
-      muted: row.muted
+      muted: row.muted,
+      ...(hasTitle ? { title: nextTitle } : {})
     };
   }
 
@@ -2750,6 +2787,17 @@ export class SocialService {
     }
 
     return row.role;
+  }
+
+  private async getFriendUserIds(userId: string): Promise<string[]> {
+    const result = await this.db.query<{ friend_user_id: string }>(
+      `SELECT friend_user_id
+       FROM friendships
+       WHERE user_id = $1`,
+      [userId]
+    );
+
+    return result.rows.map((row) => row.friend_user_id);
   }
 
   private async assertParentRole(userId: string): Promise<void> {

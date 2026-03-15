@@ -15,6 +15,7 @@ export interface FriendDto {
   id: string;
   name: string;
   status?: string;
+  avatarUri?: string;
   trusted: boolean;
 }
 

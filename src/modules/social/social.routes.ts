@@ -357,14 +357,15 @@ export async function socialRoutes(app: FastifyInstance): Promise<void> {
           type: 'object',
           properties: {
             favorite: { type: 'boolean' },
-            muted: { type: 'boolean' }
+            muted: { type: 'boolean' },
+            title: { type: 'string', minLength: 1, maxLength: 100 }
           }
         }
       }
     },
     async (request) => {
       const params = request.params as { roomId: string };
-      const body = (request.body as { favorite?: boolean; muted?: boolean } | undefined) ?? {};
+      const body = (request.body as { favorite?: boolean; muted?: boolean; title?: string } | undefined) ?? {};
       const data = await app.socialService.updateRoomSettings(request.user.sub, params.roomId, body);
       return { success: true, data };
     }
