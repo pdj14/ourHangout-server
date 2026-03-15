@@ -11,6 +11,7 @@ import type { PairingService } from '../modules/pairing/pairing.service';
 import type { ContactsService } from '../modules/contacts/contacts.service';
 import type { BotService } from '../modules/bots/bot.service';
 import type { SocialService } from '../modules/social/social.service';
+import type { GuardianService } from '../modules/guardian/guardian.service';
 import type { JwtUserPayload } from '../modules/auth/auth.types';
 
 declare module 'fastify' {
@@ -29,6 +30,7 @@ declare module 'fastify' {
     contactsService: ContactsService;
     botService: BotService;
     socialService: SocialService;
+    guardianService: GuardianService;
     authenticate: (request: FastifyRequest, reply: FastifyReply) => Promise<void>;
   }
 }
