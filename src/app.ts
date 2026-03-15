@@ -32,9 +32,18 @@ import { swaggerPlugin } from './plugins/swagger';
 export async function buildServer(): Promise<FastifyInstance> {
   const app = Fastify({
     trustProxy: env.TRUST_PROXY,
+    bodyLimit: 50 * 1024 * 1024,
     logger: {
       level: env.LOG_LEVEL
     }
+  });
+
+  app.addContentTypeParser(/^image\/.*/, { parseAs: 'buffer', bodyLimit: 50 * 1024 * 1024 }, (_request, body, done) => {
+    done(null, body);
+  });
+
+  app.addContentTypeParser(/^video\/.*/, { parseAs: 'buffer', bodyLimit: 50 * 1024 * 1024 }, (_request, body, done) => {
+    done(null, body);
   });
 
   await app.register(websocket);

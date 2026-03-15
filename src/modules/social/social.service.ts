@@ -1,6 +1,9 @@
 import { randomUUID } from 'crypto';
+import { promises as fs } from 'fs';
 import type { FastifyBaseLogger } from 'fastify';
+import { dirname, relative, resolve } from 'path';
 import type { Pool, PoolClient } from 'pg';
+import { env } from '../../config/env';
 import { AppError, ErrorCodes } from '../../lib/errors';
 import { FcmPushService } from '../../lib/push/fcm-push.service';
 import type { ConnectionManager } from '../chat/connection-manager';
@@ -276,6 +279,47 @@ function getDirectKey(userIdA: string, userIdB: string): string {
   return `${a}:${b}`;
 }
 
+function trimTrailingSlash(value: string): string {
+  return value.replace(/\/+$/, '');
+}
+
+function getMediaPublicBaseUrl(): string {
+  return trimTrailingSlash(env.PUBLIC_BASE_URL);
+}
+
+function getMediaPublicPrefix(): string {
+  return `${getMediaPublicBaseUrl()}/v1/media/files/`;
+}
+
+function buildMediaFileUrl(relativePath: string): string {
+  return `${getMediaPublicPrefix()}${relativePath.replace(/^\/+/, '')}`;
+}
+
+function getMediaStorageRoot(): string {
+  return resolve(process.cwd(), env.MEDIA_STORAGE_DIR);
+}
+
+function resolveMediaStoragePath(fileUrl: string): string {
+  const prefix = getMediaPublicPrefix();
+  if (!fileUrl.startsWith(prefix)) {
+    throw new AppError(400, ErrorCodes.VALIDATION_ERROR, 'Unsupported media file URL.');
+  }
+
+  const relativePath = fileUrl.slice(prefix.length).replace(/^\/+/, '');
+  if (!relativePath) {
+    throw new AppError(400, ErrorCodes.VALIDATION_ERROR, 'Missing media file path.');
+  }
+
+  const root = getMediaStorageRoot();
+  const absolutePath = resolve(root, relativePath);
+  const relativeToRoot = relative(root, absolutePath);
+  if (relativeToRoot.startsWith('..') || relativeToRoot === '') {
+    throw new AppError(400, ErrorCodes.VALIDATION_ERROR, 'Invalid media file path.');
+  }
+
+  return absolutePath;
+}
+
 export class SocialService {
   private readonly db: Pool;
   private readonly connectionManager: ConnectionManager;
@@ -289,6 +333,10 @@ export class SocialService {
     this.clawBridge = deps.clawBridge;
     this.pushService = deps.pushService;
     this.logger = deps.logger;
+  }
+
+  getMediaPublicBaseUrl(): string {
+    return getMediaPublicBaseUrl();
   }
 
   async getMeProfile(userId: string): Promise<UserProfileDto> {
@@ -384,8 +432,9 @@ export class SocialService {
     const m = String(now.getUTCMonth() + 1).padStart(2, '0');
     const ext = mapMimeToExtension(mimeType);
     const fileId = randomUUID();
-    const fileUrl = `https://mock-storage.local/media/${y}/${m}/${fileId}.${ext}`;
-    const uploadUrl = `${fileUrl}?mockSigned=1`;
+    const relativePath = `${y}/${m}/${fileId}.${ext}`;
+    const fileUrl = buildMediaFileUrl(relativePath);
+    const uploadUrl = `${getMediaPublicBaseUrl()}/v1/media/upload?fileUrl=${encodeURIComponent(fileUrl)}`;
 
     await this.db.query(
       `INSERT INTO media_assets (owner_user_id, kind, mime_type, size_bytes, file_url, status)
@@ -400,6 +449,51 @@ export class SocialService {
     };
   }
 
+  async storeUploadedMedia(
+    userId: string,
+    params: {
+      fileUrl: string;
+      bytes: Buffer;
+    }
+  ): Promise<{ fileUrl: string; status: 'uploaded' }> {
+    const fileUrl = params.fileUrl.trim();
+    if (!fileUrl) {
+      throw new AppError(400, ErrorCodes.VALIDATION_ERROR, 'fileUrl is required.');
+    }
+
+    const pending = await this.db.query<{ size_bytes: number }>(
+      `SELECT size_bytes
+       FROM media_assets
+       WHERE owner_user_id = $1
+         AND file_url = $2
+         AND status = 'pending'
+       LIMIT 1`,
+      [userId, fileUrl]
+    );
+
+    const row = pending.rows[0];
+    if (!row) {
+      throw new AppError(404, ErrorCodes.RESOURCE_NOT_FOUND, 'Pending media asset not found.');
+    }
+
+    if (!params.bytes.length) {
+      throw new AppError(400, ErrorCodes.VALIDATION_ERROR, 'Media payload is empty.');
+    }
+
+    if (params.bytes.length > Number(row.size_bytes)) {
+      throw new AppError(400, ErrorCodes.VALIDATION_ERROR, 'Uploaded media exceeds the declared size.');
+    }
+
+    const storagePath = resolveMediaStoragePath(fileUrl);
+    await fs.mkdir(dirname(storagePath), { recursive: true });
+    await fs.writeFile(storagePath, params.bytes);
+
+    return {
+      fileUrl,
+      status: 'uploaded'
+    };
+  }
+
   async completeMediaUpload(
     userId: string,
     params: {
@@ -407,6 +501,13 @@ export class SocialService {
       kind: 'image' | 'video' | 'avatar';
     }
   ): Promise<{ fileUrl: string; kind: 'image' | 'video' | 'avatar'; status: 'completed' }> {
+    const storagePath = resolveMediaStoragePath(params.fileUrl);
+    try {
+      await fs.access(storagePath);
+    } catch {
+      throw new AppError(409, ErrorCodes.CONFLICT, 'Media file has not been uploaded yet.');
+    }
+
     const result = await this.db.query<{ file_url: string; kind: 'image' | 'video' | 'avatar' }>(
       `UPDATE media_assets
        SET status = 'completed',
@@ -438,6 +539,35 @@ export class SocialService {
       fileUrl: row.file_url,
       kind: row.kind,
       status: 'completed'
+    };
+  }
+
+  async getCompletedMediaDownload(fileUrl: string): Promise<{ path: string; mimeType: string; size: number }> {
+    const normalizedFileUrl = fileUrl.trim();
+    const result = await this.db.query<{ mime_type: string; size_bytes: number }>(
+      `SELECT mime_type, size_bytes
+       FROM media_assets
+       WHERE file_url = $1
+         AND status = 'completed'
+       LIMIT 1`,
+      [normalizedFileUrl]
+    );
+
+    const row = result.rows[0];
+    if (!row) {
+      throw new AppError(404, ErrorCodes.RESOURCE_NOT_FOUND, 'Media asset not found.');
+    }
+
+    const path = resolveMediaStoragePath(normalizedFileUrl);
+    const stat = await fs.stat(path).catch(() => null);
+    if (!stat?.isFile()) {
+      throw new AppError(404, ErrorCodes.RESOURCE_NOT_FOUND, 'Media file not found.');
+    }
+
+    return {
+      path,
+      mimeType: row.mime_type,
+      size: stat.size || Number(row.size_bytes) || 0
     };
   }
 
@@ -949,6 +1079,15 @@ export class SocialService {
          AND mem.left_at IS NULL
          AND r.deleted_at IS NULL
          AND (
+           r.type <> 'direct' OR
+           2 <= (
+             SELECT COUNT(*)::int
+             FROM room_members rm_active
+             WHERE rm_active.room_id = r.id
+               AND rm_active.left_at IS NULL
+           )
+         )
+         AND (
            $2::timestamptz IS NULL OR
            r.updated_at < $2 OR
            (r.updated_at = $2 AND r.id < $3::uuid)
@@ -1195,41 +1334,26 @@ export class SocialService {
     const room = await this.assertRoomMembership(roomId, userId);
 
     if (room.type === 'direct') {
-      const profile = await this.getUserProfileRow(userId);
-      const leaveText = makeSystemMessageToken('member_left', normalizeName(profile.display_name, profile.email));
+      const client = await this.db.connect();
+      let memberIds: string[] = [];
 
-      await this.db.query(
-        `UPDATE room_members
-         SET left_at = NOW()
-         WHERE room_id = $1
-           AND user_id = $2
-           AND left_at IS NULL`,
-        [roomId, userId]
-      );
-
-      await this.db.query(
-        `UPDATE rooms
-         SET updated_at = NOW()
-         WHERE id = $1`,
-        [roomId]
-      );
-
-      const inserted = await this.appendSystemRoomMessage(roomId, leaveText);
-      const members = await this.getActiveRoomMemberIds(roomId);
-      if (inserted) {
-        this.emitToUsers(members, {
-          event: 'message.new',
-          data: {
-            roomId,
-            message: inserted
-          }
-        });
+      try {
+        await client.query('BEGIN');
+        memberIds = await this.getAllRoomMemberIds(roomId, client);
+        await this.closeDirectRoom(client, roomId);
+        await client.query('COMMIT');
+      } catch (error) {
+        await client.query('ROLLBACK');
+        throw error;
+      } finally {
+        client.release();
       }
 
-      this.emitToUsers([...members, userId], {
+      this.emitToUsers(memberIds, {
         event: 'room.updated',
         data: {
-          roomId
+          roomId,
+          deleted: true
         }
       });
 
@@ -2086,6 +2210,15 @@ export class SocialService {
        WHERE mem.user_id = $1
          AND mem.left_at IS NULL
          AND r.deleted_at IS NULL
+         AND (
+           r.type <> 'direct' OR
+           2 <= (
+             SELECT COUNT(*)::int
+             FROM room_members rm_active
+             WHERE rm_active.room_id = r.id
+               AND rm_active.left_at IS NULL
+           )
+         )
          AND r.id = $2
        LIMIT 1`,
       [userId, roomId]
@@ -2370,6 +2503,19 @@ export class SocialService {
     return result.rows.map((row) => row.user_id);
   }
 
+  private async getAllRoomMemberIds(roomId: string, client?: PoolClient): Promise<string[]> {
+    const executor = client ?? this.db;
+    const result = await executor.query<{ user_id: string }>(
+      `SELECT user_id
+       FROM room_members
+       WHERE room_id = $1
+       ORDER BY joined_at ASC`,
+      [roomId]
+    );
+
+    return result.rows.map((row) => row.user_id);
+  }
+
   private async getUserProfileRow(userId: string): Promise<UserProfileRow> {
     const result = await this.db.query<UserProfileRow>(
       `SELECT id, email, display_name, status_message, avatar_url, locale
@@ -2497,6 +2643,8 @@ export class SocialService {
   ): Promise<string> {
     const directKey = getDirectKey(userAId, userBId);
 
+    await this.archiveDirectRoomByKeyIfNeeded(client, directKey);
+
     const roomResult = await client.query<{ id: string }>(
       `INSERT INTO rooms (type, direct_key, title, created_by, created_at, updated_at, deleted_at)
        VALUES ('direct', $1, NULL, $2, NOW(), NOW(), NULL)
@@ -2534,6 +2682,57 @@ export class SocialService {
     );
 
     return roomId;
+  }
+
+  private async archiveDirectRoomByKeyIfNeeded(client: PoolClient, directKey: string): Promise<void> {
+    const existing = await client.query<{ id: string; deleted_at: Date | null; has_left_member: boolean }>(
+      `SELECT r.id,
+              r.deleted_at,
+              EXISTS(
+                SELECT 1
+                FROM room_members rm
+                WHERE rm.room_id = r.id
+                  AND rm.left_at IS NOT NULL
+              ) AS has_left_member
+       FROM rooms r
+       WHERE r.type = 'direct'
+         AND r.direct_key = $1
+       LIMIT 1
+       FOR UPDATE`,
+      [directKey]
+    );
+
+    const row = existing.rows[0];
+    if (!row) {
+      return;
+    }
+
+    if (!row.deleted_at && !row.has_left_member) {
+      return;
+    }
+
+    await this.closeDirectRoom(client, row.id);
+  }
+
+  private async closeDirectRoom(client: PoolClient, roomId: string): Promise<void> {
+    await client.query(
+      `UPDATE room_members
+       SET left_at = COALESCE(left_at, NOW())
+       WHERE room_id = $1`,
+      [roomId]
+    );
+
+    await client.query(
+      `UPDATE rooms
+       SET deleted_at = COALESCE(deleted_at, NOW()),
+           updated_at = NOW(),
+           direct_key = CASE
+             WHEN direct_key IS NULL THEN NULL
+             ELSE CONCAT(direct_key, '#closed#', $2)
+           END
+       WHERE id = $1`,
+      [roomId, randomUUID()]
+    );
   }
 
   private async getUserRole(userId: string): Promise<RoleRow['role']> {

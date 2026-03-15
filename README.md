@@ -127,6 +127,8 @@ Use this when moving from NAS/single-node to managed cloud (ALB + ECS/EC2 + RDS 
 | `PORT` | no | API port (container internal default `3000`) |
 | `TRUST_PROXY` | no | `true/false`, proxy hops, or CSV list for Fastify `trustProxy` |
 | `JWT_SECRET` | yes | JWT signing secret (>=32 chars) |
+| `PUBLIC_BASE_URL` | no | Public base URL used for issued media file/upload URLs (defaults to `http://localhost:<PORT>`) |
+| `MEDIA_STORAGE_DIR` | no | Local directory for uploaded media files (defaults to `storage/media`) |
 | `GOOGLE_CLIENT_ID` | no | Google OAuth client id (single audience, backward compatibility) |
 | `GOOGLE_CLIENT_IDS` | no | Comma-separated Google OAuth client ids (recommended for app/web multi-audience) |
 | `DATABASE_URL` | yes | PostgreSQL connection string |
@@ -141,6 +143,9 @@ Use this when moving from NAS/single-node to managed cloud (ALB + ECS/EC2 + RDS 
 | `RATE_LIMIT_WINDOW` | no | Fastify rate-limit window |
 | `RATE_LIMIT_REDIS_NAMESPACE` | no | Redis key prefix for distributed rate limiting |
 | `RATE_LIMIT_SKIP_ON_ERROR` | no | `true` to fail-open if Redis rate-limit store errors |
+
+Deployment note:
+When using local media uploads, keep `MEDIA_STORAGE_DIR=storage/media` and preserve that path with a Docker volume bind such as `./storage/media:/app/storage/media`.
 | `PAIRING_CODE_TTL_SECONDS` | no | Pairing code TTL |
 | `ACCESS_TOKEN_TTL` | no | Access token lifetime |
 | `REFRESH_TOKEN_TTL_DAYS` | no | Refresh token lifetime (days) |

@@ -10,6 +10,8 @@ const envSchema = z.object({
   DATABASE_URL: z.string().min(1),
   REDIS_URL: z.string().min(1),
   JWT_SECRET: z.string().min(32),
+  PUBLIC_BASE_URL: z.string().default(''),
+  MEDIA_STORAGE_DIR: z.string().default('storage/media'),
   GOOGLE_CLIENT_ID: z.string().default(''),
   GOOGLE_CLIENT_IDS: z.string().default(''),
   FCM_PROJECT_ID: z.string().default(''),
@@ -81,6 +83,7 @@ function parseTrustProxy(value: string): boolean | number | string[] {
 
 export const env = {
   ...rawEnv,
+  PUBLIC_BASE_URL: rawEnv.PUBLIC_BASE_URL.trim() || `http://localhost:${rawEnv.PORT}`,
   TRUST_PROXY: parseTrustProxy(rawEnv.TRUST_PROXY),
   FCM_PRIVATE_KEY: rawEnv.FCM_PRIVATE_KEY.replace(/\\n/g, '\n'),
   CORS_ORIGINS: rawEnv.CORS_ORIGINS.split(',').map((origin) => origin.trim()).filter(Boolean),
