@@ -4,27 +4,439 @@ const runtimeConfig = window.__GUARDIAN_CONFIG__ || {
   guardianMasterEmails: []
 }
 
-const TAB_META = {
-  dashboard: {
-    title: 'Overview',
-    copy: 'DB summary, family links, and storage warnings.'
+const COPY = {
+  ko: {
+    tab_dashboard_title: '개요',
+    tab_dashboard_copy: 'DB 요약, 가족 연결, 저장공간 경고를 봅니다.',
+    tab_users_title: '사용자',
+    tab_users_copy: '계정 검색, 프로필 수정, 세션 제어를 처리합니다.',
+    tab_rooms_title: '메시지',
+    tab_rooms_copy: '아이들 메시지를 확인하고 test 데이터를 정리합니다.',
+    tab_storage_title: '저장공간',
+    tab_storage_copy: '자산, 고아 파일, 디스크 사용량을 점검합니다.',
+    signed_in: '로그인 계정',
+    role_label: '권한',
+    refresh_current_tab: '현재 탭 새로고침',
+    log_out: '로그아웃',
+    console_areas: '콘솔 영역',
+    hero_title: 'ourHangout 부모 관리 화면',
+    hero_body: 'DB 내용 확인, 아이들 대화 검토, test 메시지 정리, 저장공간 관리까지 한 화면에서 처리합니다.',
+    login_kicker: '부모/마스터 전용',
+    login_title: 'Guardian Console',
+    login_body: 'Google 로그인으로 들어오세요. 기본 master 계정은 {masterEmail} 입니다.',
+    google_signin_label: 'Google 로그인',
+    google_missing_config: '이 서버에는 Google Web Client ID가 아직 설정되지 않았습니다.',
+    google_current_label: '현재 브라우저 Google 계정',
+    google_current_body: '지금 브라우저에 로그인된 Google 계정으로 바로 계속합니다.',
+    google_switch_label: '다른 Google 계정 선택',
+    google_switch_body: '브라우저 기본 계정이 아니라도 다른 Google 계정을 직접 입력해서 로그인할 수 있습니다.',
+    google_switch_button: '다른 계정으로 로그인',
+    sign_in: '로그인',
+    signing_in: '로그인 중...',
+    footer_note:
+      '이 페이지는 /v1/auth/google 과 /v1/guardian/* 를 사용합니다. 부모 계정과 master 계정만 접근할 수 있습니다.',
+    dashboard_loading_title: '개요',
+    dashboard_loading_body: '서버에서 요약 정보를 불러오는 중입니다.',
+    dashboard_loading_state: 'DB 요약, 가족 연결, 저장공간 경고를 읽는 중입니다.',
+    dashboard_no_data: '대시보드 데이터가 없습니다.',
+    snapshot_title: '운영 현황',
+    snapshot_body: '계정, 방, 메시지, 저장공간 상태를 빠르게 확인합니다.',
+    family_links_title: '부모-자녀 연결',
+    family_links_body: '아이들 메시지 검토 범위를 좁히는 기준으로 사용합니다.',
+    no_family_links: '활성 parent-child 연결이 없습니다.',
+    storage_alerts_title: '저장공간 경고',
+    storage_alerts_body: '고아 파일과 추적 누락 파일을 함께 봅니다.',
+    no_orphan_files: '현재 감지된 고아 파일이 없습니다.',
+    top_storage_users_title: '상위 저장공간 사용자',
+    top_storage_users_body: '완료된 업로드 자산을 많이 가진 계정부터 보여줍니다.',
+    no_upload_assets: '완료된 업로드 자산이 아직 없습니다.',
+    kpi_users: '사용자',
+    kpi_rooms: '방',
+    kpi_messages: '메시지',
+    kpi_storage: '저장공간',
+    kpi_users_sub: '부모 {parents} / 자녀 {children}',
+    kpi_rooms_sub: '1:1 {direct} / 그룹 {group}',
+    kpi_messages_sub: '텍스트 {text} / 미디어 {media}',
+    kpi_storage_sub: '실디스크 {bytes}',
+    badge_parent_child: '부모-자녀 {count}',
+    badge_open_reports: '열린 신고 {count}',
+    badge_test_like: 'test 유사 {count}',
+    role_parent: '부모',
+    role_user: '사용자',
+    room_type_direct: '1:1',
+    room_type_group: '그룹',
+    asset_status_completed: '완료',
+    asset_status_pending: '대기',
+    asset_status_failed: '실패',
+    message_kind_text: '텍스트',
+    message_kind_system: '시스템',
+    message_kind_image: '이미지',
+    message_kind_video: '비디오',
+    asset_kind_avatar: '아바타',
+    delivery_sent: '전송됨',
+    delivery_delivered: '전달됨',
+    delivery_read: '읽음',
+    users_title: '사용자 관리',
+    users_body: '표시 이름, 상태 메시지, 전화번호, locale, 권한을 수정하고 세션을 종료할 수 있습니다.',
+    search_label: '검색',
+    search_users_placeholder: '이메일, 표시 이름, 전화번호',
+    role_filter_label: '권한',
+    limit_label: '개수',
+    load_users: '사용자 조회',
+    refresh: '새로고침',
+    table_user: '사용자',
+    table_role: '권한',
+    table_activity: '활동',
+    table_storage: '저장공간',
+    table_meta: '메타',
+    table_actions: '동작',
+    no_users_matched: '조건에 맞는 사용자가 없습니다.',
+    no_phone: '전화번호 없음',
+    no_status: '상태 메시지 없음',
+    edit: '수정',
+    revoke_sessions: '세션 종료',
+    rooms_count: '{count}개 방',
+    messages_count: '{count}개 메시지',
+    family_links_count: '{count}개 가족 연결',
+    edit_user_title: '{name} 수정',
+    edit_user_body: '저장하면 users 테이블에 바로 반영됩니다.',
+    close: '닫기',
+    display_name_label: '표시 이름',
+    phone_label: '전화번호 E.164',
+    locale_label: '언어 태그',
+    status_message_label: '상태 메시지',
+    save: '저장',
+    cancel: '취소',
+    message_review_title: '메시지 검토',
+    message_review_body: '부모가 방 기록을 검토하고 아이들 메시지와 test 데이터를 정리합니다.',
+    room_type_label: '방 유형',
+    all_option: '전체',
+    all_users: '전체 사용자',
+    child_filter_label: '자녀 필터',
+    all_linked_children: '연결된 자녀 전체',
+    room_search_placeholder: '방 제목, 멤버 이름 또는 이메일',
+    load_rooms: '방 조회',
+    bulk_cleanup_title: 'test 메시지 일괄 정리',
+    bulk_cleanup_body: '기본 검색어는 test 입니다. 먼저 미리보기 후 실제 삭제를 실행하세요.',
+    search_text_label: '검색어',
+    room_label: '방',
+    all_rooms: '전체 방',
+    sender_label: '보낸 사람',
+    before_label: '이전 시각',
+    message_kinds_label: '메시지 종류',
+    preview: '미리보기',
+    delete_matches: '조건 일괄 삭제',
+    preview_result: '미리보기 결과',
+    preview_only: '미리보기만 수행했습니다. 아직 삭제하지 않았습니다.',
+    messages_deleted_count: '{count}개 메시지를 삭제했습니다.',
+    no_bulk_matches: '조건에 맞는 메시지가 없습니다.',
+    rooms_title: '방 목록',
+    rooms_body: '메시지 기록을 확인할 방을 선택하세요.',
+    no_rooms_matched: '조건에 맞는 방이 없습니다.',
+    no_messages_yet: '아직 메시지가 없습니다.',
+    select_room: '방을 선택하세요',
+    select_room_body: '왼쪽에서 방을 선택하면 메시지를 불러옵니다.',
+    refresh_messages: '메시지 새로고침',
+    no_messages_loaded: '이 방에서 불러온 메시지가 없습니다.',
+    no_text_payload: '텍스트 내용 없음',
+    load_older_messages: '이전 메시지 더 보기',
+    storage_title: '저장공간 관리',
+    storage_body: '추적 중인 업로드, 미참조 자산, 디스크에만 있는 파일을 함께 검토합니다.',
+    delete_orphan_files: '고아 파일 정리',
+    kpi_tracked: '추적 자산',
+    kpi_tracked_sub: '완료 {completed} / 대기 {pending}',
+    kpi_tracked_bytes: '추적 용량',
+    kpi_orphans: '고아 파일',
+    kpi_orphans_sub: '추적 누락 {count}',
+    kpi_failed_assets: '실패 자산',
+    kpi_failed_assets_sub: 'failed 상태 행',
+    by_kind_title: '종류별',
+    top_users_title: '상위 사용자',
+    loading_storage_overview: '저장공간 개요를 불러오는 중입니다.',
+    owner_label: '소유자',
+    all_owners: '전체 소유자',
+    status_label: '상태',
+    unreferenced_only: '미참조만 보기',
+    load_assets: '자산 조회',
+    table_owner: '소유자',
+    table_asset: '자산',
+    table_references: '참조',
+    table_file_state: '파일 상태',
+    table_updated: '갱신 시각',
+    no_assets_matched: '조건에 맞는 자산이 없습니다.',
+    avatar_linked: '아바타 연결됨',
+    avatar_not_linked: '아바타 연결 없음',
+    room_message_refs: '방 메시지 참조 {count}',
+    members_count: '{count}명',
+    assets_count: '{count}개 자산',
+    matches_count: '{count}건',
+    file_exists: '파일 존재',
+    file_missing: '파일 없음',
+    delete: '삭제',
+    google_missing_id_token: 'Google 로그인에서 ID 토큰을 받지 못했습니다.',
+    google_signin_failed: 'Google 로그인에 실패했습니다.',
+    google_redirect_failed: 'Google 계정 선택 로그인 처리에 실패했습니다.',
+    google_redirect_state_invalid: 'Google 로그인 상태값 검증에 실패했습니다.',
+    google_redirect_nonce_invalid: 'Google 로그인 nonce 검증에 실패했습니다.',
+    confirm_revoke_sessions: '이 사용자의 모든 refresh 세션을 종료할까요?',
+    flash_sessions_revoked: '사용자 세션을 종료했습니다.',
+    flash_no_active_sessions: '종료할 활성 세션이 없었습니다.',
+    confirm_delete_message: '이 메시지를 삭제할까요?',
+    flash_message_deleted: '메시지를 삭제했습니다.',
+    asset_still_referenced: '이 자산은 room_messages 에서 참조 중입니다. 관련 메시지를 먼저 삭제하세요.',
+    confirm_clear_avatar: '이 자산은 아바타로 연결되어 있습니다. 아바타를 비우고 계속할까요?',
+    confirm_delete_asset: '이 자산을 삭제할까요?',
+    flash_asset_deleted: '자산을 삭제했습니다.',
+    confirm_delete_orphans: 'media_assets 에 없는 디스크 파일을 삭제할까요?',
+    flash_orphans_deleted: '{count}개 파일을 삭제했고 {bytes} 를 확보했습니다.',
+    action_failed: '작업에 실패했습니다.',
+    flash_user_updated: '사용자 정보를 저장했습니다.',
+    confirm_delete_matches: '조건에 맞는 메시지를 실제로 삭제할까요?',
+    session_validation_failed: '세션 확인에 실패했습니다. 다시 로그인하세요.',
+    no_data: '데이터 없음'
+    ,
+    empty_content: '내용 없음'
   },
-  users: {
-    title: 'Users',
-    copy: 'Account search, profile updates, and session control.'
-  },
-  rooms: {
-    title: 'Messages',
-    copy: 'Parent review for children messages and test cleanup.'
-  },
-  storage: {
-    title: 'Storage',
-    copy: 'Assets, orphan files, and disk usage checks.'
+  en: {
+    tab_dashboard_title: 'Overview',
+    tab_dashboard_copy: 'DB summary, family links, and storage warnings.',
+    tab_users_title: 'Users',
+    tab_users_copy: 'Account search, profile updates, and session control.',
+    tab_rooms_title: 'Messages',
+    tab_rooms_copy: 'Parent review for children messages and test cleanup.',
+    tab_storage_title: 'Storage',
+    tab_storage_copy: 'Assets, orphan files, and disk usage checks.',
+    signed_in: 'Signed In',
+    role_label: 'Role',
+    refresh_current_tab: 'Refresh Current Tab',
+    log_out: 'Log Out',
+    console_areas: 'Console Areas',
+    hero_title: 'Parent operations for ourHangout',
+    hero_body: 'Review DB content, inspect children message history, clean up test messages, and manage storage from one place.',
+    login_kicker: 'Parent or Master Only',
+    login_title: 'Guardian Console',
+    login_body: 'Use Google sign-in. The default master account is {masterEmail}.',
+    google_signin_label: 'Google Sign-In',
+    google_missing_config: 'Google Web Client ID is not configured on this server yet.',
+    google_current_label: 'Current browser Google account',
+    google_current_body: 'Continue with the Google account already signed into this browser.',
+    google_switch_label: 'Choose another Google account',
+    google_switch_body: 'Use a different Google account even if it is not the browser default account.',
+    google_switch_button: 'Sign in with another account',
+    sign_in: 'Sign In',
+    signing_in: 'Signing in...',
+    footer_note:
+      'This page uses /v1/auth/google and /v1/guardian/*. Access is restricted to parent and configured master accounts.',
+    dashboard_loading_title: 'Overview',
+    dashboard_loading_body: 'Loading summary data from the server.',
+    dashboard_loading_state: 'Reading DB summary, family links, and storage warnings.',
+    dashboard_no_data: 'No dashboard data available.',
+    snapshot_title: 'Operational Snapshot',
+    snapshot_body: 'Quick status across accounts, rooms, messages, and storage.',
+    family_links_title: 'Family Links',
+    family_links_body: 'Use active parent-child links to narrow message review to children.',
+    no_family_links: 'No active parent-child links were found.',
+    storage_alerts_title: 'Storage Alerts',
+    storage_alerts_body: 'Review orphan files and missing tracked uploads together.',
+    no_orphan_files: 'No orphan files are currently detected.',
+    top_storage_users_title: 'Top Storage Users',
+    top_storage_users_body: 'Largest completed media owners first.',
+    no_upload_assets: 'No completed upload assets yet.',
+    kpi_users: 'Users',
+    kpi_rooms: 'Rooms',
+    kpi_messages: 'Messages',
+    kpi_storage: 'Storage',
+    kpi_users_sub: 'Parent {parents} / Child {children}',
+    kpi_rooms_sub: 'Direct {direct} / Group {group}',
+    kpi_messages_sub: 'Text {text} / Media {media}',
+    kpi_storage_sub: 'Disk {bytes}',
+    badge_parent_child: 'Parent-child {count}',
+    badge_open_reports: 'Open reports {count}',
+    badge_test_like: 'Test-like {count}',
+    role_parent: 'Parent',
+    role_user: 'User',
+    room_type_direct: 'Direct',
+    room_type_group: 'Group',
+    asset_status_completed: 'Completed',
+    asset_status_pending: 'Pending',
+    asset_status_failed: 'Failed',
+    message_kind_text: 'Text',
+    message_kind_system: 'System',
+    message_kind_image: 'Image',
+    message_kind_video: 'Video',
+    asset_kind_avatar: 'Avatar',
+    delivery_sent: 'Sent',
+    delivery_delivered: 'Delivered',
+    delivery_read: 'Read',
+    users_title: 'User Management',
+    users_body: 'Update display name, status, phone, locale, and role, then revoke sessions when needed.',
+    search_label: 'Search',
+    search_users_placeholder: 'email, display name, phone',
+    role_filter_label: 'Role',
+    limit_label: 'Limit',
+    load_users: 'Load Users',
+    refresh: 'Refresh',
+    table_user: 'User',
+    table_role: 'Role',
+    table_activity: 'Activity',
+    table_storage: 'Storage',
+    table_meta: 'Meta',
+    table_actions: 'Actions',
+    no_users_matched: 'No users matched this filter.',
+    no_phone: 'No phone set',
+    no_status: 'No status message',
+    edit: 'Edit',
+    revoke_sessions: 'Revoke Sessions',
+    rooms_count: '{count} rooms',
+    messages_count: '{count} messages',
+    family_links_count: '{count} family links',
+    edit_user_title: 'Edit {name}',
+    edit_user_body: 'Save writes directly to the users table.',
+    close: 'Close',
+    display_name_label: 'Display Name',
+    phone_label: 'Phone E.164',
+    locale_label: 'Locale',
+    status_message_label: 'Status Message',
+    save: 'Save',
+    cancel: 'Cancel',
+    message_review_title: 'Message Review',
+    message_review_body: 'Parents can review room history, inspect children conversations, and clean up test data.',
+    room_type_label: 'Room Type',
+    all_option: 'All',
+    all_users: 'All users',
+    child_filter_label: 'Child Filter',
+    all_linked_children: 'All linked children',
+    room_search_placeholder: 'room title, member name, or email',
+    load_rooms: 'Load Rooms',
+    bulk_cleanup_title: 'Bulk Test Message Cleanup',
+    bulk_cleanup_body: 'Default search is set to the word "test". Preview first, then run delete only after confirmation.',
+    search_text_label: 'Search Text',
+    room_label: 'Room',
+    all_rooms: 'All rooms',
+    sender_label: 'Sender',
+    before_label: 'Before',
+    message_kinds_label: 'Message Kinds',
+    preview: 'Preview',
+    delete_matches: 'Delete Matches',
+    preview_result: 'Preview Result',
+    preview_only: 'Preview only. No delete has been executed yet.',
+    messages_deleted_count: '{count} messages were deleted.',
+    no_bulk_matches: 'No messages matched the bulk filter.',
+    rooms_title: 'Rooms',
+    rooms_body: 'Choose a room to inspect message history.',
+    no_rooms_matched: 'No rooms matched this filter.',
+    no_messages_yet: 'No messages yet.',
+    select_room: 'Select a room',
+    select_room_body: 'Select a room on the left to load messages.',
+    refresh_messages: 'Refresh Messages',
+    no_messages_loaded: 'No messages loaded for this room.',
+    no_text_payload: 'No text payload',
+    load_older_messages: 'Load Older Messages',
+    storage_title: 'Storage Management',
+    storage_body: 'Review tracked uploads, unreferenced assets, and disk-only files together.',
+    delete_orphan_files: 'Delete Orphan Files',
+    kpi_tracked: 'Tracked',
+    kpi_tracked_sub: 'Completed {completed} / Pending {pending}',
+    kpi_tracked_bytes: 'Tracked Bytes',
+    kpi_orphans: 'Orphans',
+    kpi_orphans_sub: 'Missing tracked {count}',
+    kpi_failed_assets: 'Failed Assets',
+    kpi_failed_assets_sub: 'Rows with failed status',
+    by_kind_title: 'By Kind',
+    top_users_title: 'Top Users',
+    loading_storage_overview: 'Loading storage overview.',
+    owner_label: 'Owner',
+    all_owners: 'All owners',
+    status_label: 'Status',
+    unreferenced_only: 'unreferenced only',
+    load_assets: 'Load Assets',
+    table_owner: 'Owner',
+    table_asset: 'Asset',
+    table_references: 'References',
+    table_file_state: 'File State',
+    table_updated: 'Updated',
+    no_assets_matched: 'No assets matched this filter.',
+    avatar_linked: 'Avatar linked',
+    avatar_not_linked: 'No avatar link',
+    room_message_refs: 'Room message refs {count}',
+    members_count: '{count} members',
+    assets_count: '{count} assets',
+    matches_count: '{count} matches',
+    file_exists: 'File exists',
+    file_missing: 'File missing',
+    delete: 'Delete',
+    google_missing_id_token: 'Google sign-in did not return an ID token.',
+    google_signin_failed: 'Google sign-in failed.',
+    google_redirect_failed: 'Google account chooser sign-in failed.',
+    google_redirect_state_invalid: 'Google sign-in state validation failed.',
+    google_redirect_nonce_invalid: 'Google sign-in nonce validation failed.',
+    confirm_revoke_sessions: 'Revoke all refresh sessions for this user?',
+    flash_sessions_revoked: 'User sessions revoked.',
+    flash_no_active_sessions: 'There were no active sessions to revoke.',
+    confirm_delete_message: 'Delete this message?',
+    flash_message_deleted: 'Message deleted.',
+    asset_still_referenced: 'This asset is still referenced by room messages. Delete those messages first.',
+    confirm_clear_avatar: 'This asset is linked as an avatar. Clear the avatar and continue?',
+    confirm_delete_asset: 'Delete this asset?',
+    flash_asset_deleted: 'Asset deleted.',
+    confirm_delete_orphans: 'Delete files on disk that are not tracked in media_assets?',
+    flash_orphans_deleted: '{count} files deleted, {bytes} reclaimed.',
+    action_failed: 'Action failed.',
+    flash_user_updated: 'User profile updated.',
+    confirm_delete_matches: 'Delete all matched messages?',
+    session_validation_failed: 'Session validation failed. Please sign in again.',
+    no_data: 'No data',
+    empty_content: 'Empty content'
+  }
+}
+
+function loadLocale() {
+  try {
+    const raw = localStorage.getItem('guardian-console-locale')
+    return raw === 'en' ? 'en' : 'ko'
+  } catch {
+    return 'ko'
+  }
+}
+
+function t(key, vars = {}) {
+  const template = COPY[state.locale]?.[key] ?? COPY.en[key] ?? key
+  return template.replace(/\{(\w+)\}/g, (_, name) => String(vars[name] ?? ''))
+}
+
+function currentLocaleTag() {
+  return state.locale === 'en' ? 'en-US' : 'ko-KR'
+}
+
+function setLocale(locale) {
+  state.locale = locale === 'en' ? 'en' : 'ko'
+  localStorage.setItem('guardian-console-locale', state.locale)
+}
+
+function getTabMeta() {
+  return {
+    dashboard: {
+      title: t('tab_dashboard_title'),
+      copy: t('tab_dashboard_copy')
+    },
+    users: {
+      title: t('tab_users_title'),
+      copy: t('tab_users_copy')
+    },
+    rooms: {
+      title: t('tab_rooms_title'),
+      copy: t('tab_rooms_copy')
+    },
+    storage: {
+      title: t('tab_storage_title'),
+      copy: t('tab_storage_copy')
+    }
   }
 }
 
 const state = {
   session: loadSession(),
+  locale: loadLocale(),
   user: null,
   activeTab: 'dashboard',
   flash: null,
@@ -91,6 +503,89 @@ function hasGoogleIdentityApi() {
   return !!window.google?.accounts?.id
 }
 
+function randomToken(length = 24) {
+  const bytes = new Uint8Array(length)
+  window.crypto.getRandomValues(bytes)
+  return Array.from(bytes, (value) => value.toString(16).padStart(2, '0')).join('')
+}
+
+function decodeJwtPayload(token) {
+  const [, payload] = token.split('.')
+  if (!payload) return null
+
+  const normalized = payload.replace(/-/g, '+').replace(/_/g, '/')
+  const padded = normalized.padEnd(Math.ceil(normalized.length / 4) * 4, '=')
+
+  try {
+    return JSON.parse(window.atob(padded))
+  } catch {
+    return null
+  }
+}
+
+function getGuardianRedirectUri() {
+  return `${window.location.origin}/guardian`
+}
+
+function startGoogleAlternateAccountFlow() {
+  if (!hasGoogleClientConfig()) {
+    setFlash('error', t('google_missing_config'))
+    return
+  }
+
+  const stateValue = randomToken(16)
+  const nonce = randomToken(16)
+
+  sessionStorage.setItem('guardian-google-state', stateValue)
+  sessionStorage.setItem('guardian-google-nonce', nonce)
+
+  const url = new URL('https://accounts.google.com/o/oauth2/v2/auth')
+  url.searchParams.set('client_id', runtimeConfig.googleClientId)
+  url.searchParams.set('redirect_uri', getGuardianRedirectUri())
+  url.searchParams.set('response_type', 'id_token')
+  url.searchParams.set('scope', 'openid email profile')
+  url.searchParams.set('prompt', 'select_account')
+  url.searchParams.set('nonce', nonce)
+  url.searchParams.set('state', stateValue)
+
+  window.location.assign(url.toString())
+}
+
+async function handleGoogleRedirectResult() {
+  const hash = window.location.hash.replace(/^#/, '')
+  if (!hash.includes('id_token=')) {
+    return false
+  }
+
+  const params = new URLSearchParams(hash)
+  const idToken = params.get('id_token') || ''
+  const returnedState = params.get('state') || ''
+  const storedState = sessionStorage.getItem('guardian-google-state') || ''
+  const storedNonce = sessionStorage.getItem('guardian-google-nonce') || ''
+
+  history.replaceState(null, '', getGuardianRedirectUri())
+  sessionStorage.removeItem('guardian-google-state')
+  sessionStorage.removeItem('guardian-google-nonce')
+
+  if (!idToken) {
+    throw new Error(t('google_missing_id_token'))
+  }
+
+  if (!returnedState || !storedState || returnedState !== storedState) {
+    throw new Error(t('google_redirect_state_invalid'))
+  }
+
+  if (storedNonce) {
+    const payload = decodeJwtPayload(idToken)
+    if (!payload?.nonce || payload.nonce !== storedNonce) {
+      throw new Error(t('google_redirect_nonce_invalid'))
+    }
+  }
+
+  await loginWithGoogle(idToken)
+  return true
+}
+
 function loadSession() {
   try {
     const raw = localStorage.getItem('guardian-console-session')
@@ -133,7 +628,7 @@ function formatDate(value) {
   if (!value) return '-'
   const date = new Date(value)
   if (Number.isNaN(date.getTime())) return value
-  return new Intl.DateTimeFormat('ko-KR', {
+  return new Intl.DateTimeFormat(currentLocaleTag(), {
     year: 'numeric',
     month: '2-digit',
     day: '2-digit',
@@ -158,15 +653,47 @@ function formatBytes(value) {
 
 function roleBadge(role) {
   if (role === 'parent') {
-    return '<span class="badge teal">Parent</span>'
+    return `<span class="badge teal">${escapeHtml(t('role_parent'))}</span>`
   }
 
-  return '<span class="badge">User</span>'
+  return `<span class="badge">${escapeHtml(t('role_user'))}</span>`
+}
+
+function roleText(role) {
+  return role === 'parent' ? t('role_parent') : t('role_user')
 }
 
 function statusBadge(label, tone = '') {
   const toneClass = tone ? ` ${tone}` : ''
   return `<span class="badge${toneClass}">${escapeHtml(label)}</span>`
+}
+
+function roomTypeLabel(type) {
+  return type === 'group' ? t('room_type_group') : t('room_type_direct')
+}
+
+function assetStatusLabel(status) {
+  if (status === 'completed') return t('asset_status_completed')
+  if (status === 'failed') return t('asset_status_failed')
+  return t('asset_status_pending')
+}
+
+function assetKindLabel(kind) {
+  if (kind === 'avatar') return t('asset_kind_avatar')
+  return messageKindLabel(kind)
+}
+
+function messageKindLabel(kind) {
+  if (kind === 'system') return t('message_kind_system')
+  if (kind === 'image') return t('message_kind_image')
+  if (kind === 'video') return t('message_kind_video')
+  return t('message_kind_text')
+}
+
+function deliveryLabel(delivery) {
+  if (delivery === 'delivered') return t('delivery_delivered')
+  if (delivery === 'read') return t('delivery_read')
+  return t('delivery_sent')
 }
 
 function isSelectedTab(tab) {
@@ -255,29 +782,6 @@ async function refreshSession() {
   })
 
   return true
-}
-
-async function login(email, password) {
-  state.loading.auth = true
-  render()
-
-  try {
-    const data = await apiRequest('/v1/auth/login', {
-      method: 'POST',
-      body: { email, password }
-    })
-
-    saveSession({
-      accessToken: data.tokens.accessToken,
-      refreshToken: data.tokens.refreshToken
-    })
-    state.user = data.user
-    clearFlash()
-    await loadAllData()
-  } finally {
-    state.loading.auth = false
-    render()
-  }
 }
 
 async function loginWithGoogle(idToken) {
@@ -424,18 +928,20 @@ function renderTopbar() {
     <div class="topbar">
       <section class="hero">
         <span class="hero-kicker">ourHangout Guardian Console</span>
-        <h1>Parent operations for ourHangout</h1>
-        <p>Review DB content, inspect children message history, clean up test messages, and manage storage from one place.</p>
+        <h1>${escapeHtml(t('hero_title'))}</h1>
+        <p>${escapeHtml(t('hero_body'))}</p>
       </section>
       <section class="session-card">
         <div>
-          <div class="session-label">Signed In</div>
+          <div class="session-label">${escapeHtml(t('signed_in'))}</div>
           <div class="session-name">${escapeHtml(name)}</div>
-          <div class="session-meta">${escapeHtml(state.user?.email || '')}<br />Role: ${escapeHtml(state.user?.role || '-')}</div>
+          <div class="session-meta">${escapeHtml(state.user?.email || '')}<br />${escapeHtml(t('role_label'))}: ${escapeHtml(state.user?.role ? roleText(state.user.role) : '-')}</div>
         </div>
         <div class="top-actions">
-          <button class="button secondary" data-action="refresh-current">Refresh Current Tab</button>
-          <button class="button ghost" data-action="logout">Log Out</button>
+          <button class="button ${state.locale === 'ko' ? 'secondary' : 'ghost'}" data-set-locale="ko">KO</button>
+          <button class="button ${state.locale === 'en' ? 'secondary' : 'ghost'}" data-set-locale="en">EN</button>
+          <button class="button secondary" data-action="refresh-current">${escapeHtml(t('refresh_current_tab'))}</button>
+          <button class="button ghost" data-action="logout">${escapeHtml(t('log_out'))}</button>
         </div>
       </section>
     </div>
@@ -443,11 +949,12 @@ function renderTopbar() {
 }
 
 function renderSidebar() {
+  const tabMeta = getTabMeta()
   return `
     <aside class="sidebar">
-      <div class="nav-title">Console Areas</div>
+      <div class="nav-title">${escapeHtml(t('console_areas'))}</div>
       <div class="nav-list">
-        ${Object.entries(TAB_META)
+        ${Object.entries(tabMeta)
           .map(
             ([key, meta]) => `
               <button class="nav-button ${isSelectedTab(key)}" data-tab="${key}">
@@ -492,14 +999,14 @@ function scheduleGoogleButtonRender() {
       client_id: runtimeConfig.googleClientId,
       callback: async (response) => {
         if (!response?.credential) {
-          setFlash('error', 'Google sign-in did not return an ID token.')
+          setFlash('error', t('google_missing_id_token'))
           return
         }
 
         try {
           await loginWithGoogle(response.credential)
         } catch (error) {
-          setFlash('error', error.message || 'Google sign-in failed.')
+          setFlash('error', error.message || t('google_signin_failed'))
         }
       }
     })
@@ -522,40 +1029,33 @@ function renderLogin() {
   return `
     <div class="login-wrap">
       <section class="login-card">
-        <span class="hero-kicker">Parent Access Only</span>
-        <h1>Guardian Console</h1>
-        <p>Use Google sign-in for the master guardian account. The configured master address is ${escapeHtml(getMasterEmailLabel())}.</p>
+        <span class="hero-kicker">${escapeHtml(t('login_kicker'))}</span>
+        <div class="top-actions" style="margin:14px 0 6px">
+          <button class="button ${state.locale === 'ko' ? 'secondary' : 'ghost'}" type="button" data-set-locale="ko">KO</button>
+          <button class="button ${state.locale === 'en' ? 'secondary' : 'ghost'}" type="button" data-set-locale="en">EN</button>
+        </div>
+        <h1>${escapeHtml(t('login_title'))}</h1>
+        <p>${escapeHtml(t('login_body', { masterEmail: getMasterEmailLabel() }))}</p>
         ${renderFlash()}
         <div class="section-stack">
           <div class="field">
-            <label>Google Sign-In</label>
+            <label>${escapeHtml(t('google_current_label'))}</label>
+            <div class="muted">${escapeHtml(t('google_current_body'))}</div>
             ${
               hasGoogleClientConfig()
                 ? `<div id="google-signin-area"></div>`
-                : `<div class="empty-state">Google web client ID is not configured on this server yet.</div>`
+                : `<div class="empty-state">${escapeHtml(t('google_missing_config'))}</div>`
             }
           </div>
-        </div>
-        <form id="login-form" class="section-stack" style="margin-top:18px">
           <div class="field">
-            <label>Fallback Email Login</label>
-            <div class="muted">Keep this only as a fallback path while Google login is being used.</div>
-          </div>
-          <div class="field">
-            <label for="login-email">Email</label>
-            <input class="input" id="login-email" name="email" type="email" autocomplete="username" required />
-          </div>
-          <div class="field">
-            <label for="login-password">Password</label>
-            <input class="input" id="login-password" name="password" type="password" autocomplete="current-password" required />
-          </div>
-          <div class="button-row">
-            <button class="button primary" type="submit" ${state.loading.auth ? 'disabled' : ''}>
-              ${state.loading.auth ? 'Signing in...' : 'Sign In'}
+            <label>${escapeHtml(t('google_switch_label'))}</label>
+            <div class="muted">${escapeHtml(t('google_switch_body'))}</div>
+            <button class="button primary" type="button" data-action="google-switch-account" ${!hasGoogleClientConfig() || state.loading.auth ? 'disabled' : ''}>
+              ${escapeHtml(state.loading.auth ? t('signing_in') : t('google_switch_button'))}
             </button>
           </div>
-        </form>
-        <div class="footer-note">This page uses /v1/auth/google, /v1/auth/login, and /v1/guardian/*. Access is restricted to parent-role accounts and configured guardian master accounts.</div>
+        </div>
+        <div class="footer-note">${escapeHtml(t('footer_note'))}</div>
       </section>
     </div>
   `
@@ -569,11 +1069,11 @@ function renderDashboard() {
       <section class="panel">
         <div class="panel-header">
           <div>
-            <h2 class="panel-title">Overview</h2>
-            <p class="panel-copy">Loading summary data from the server.</p>
+            <h2 class="panel-title">${escapeHtml(t('dashboard_loading_title'))}</h2>
+            <p class="panel-copy">${escapeHtml(t('dashboard_loading_body'))}</p>
           </div>
         </div>
-        <div class="empty-state">Reading DB summary, family links, and storage warnings.</div>
+        <div class="empty-state">${escapeHtml(t('dashboard_loading_state'))}</div>
       </section>
     `
   }
@@ -581,7 +1081,7 @@ function renderDashboard() {
   if (!summary) {
     return `
       <section class="panel">
-        <div class="empty-state">No dashboard data available.</div>
+        <div class="empty-state">${escapeHtml(t('dashboard_no_data'))}</div>
       </section>
     `
   }
@@ -590,20 +1090,20 @@ function renderDashboard() {
     <section class="panel">
       <div class="panel-header">
         <div>
-          <h2 class="panel-title">Operational Snapshot</h2>
-          <p class="panel-copy">Quick status across accounts, rooms, messages, and storage.</p>
+          <h2 class="panel-title">${escapeHtml(t('snapshot_title'))}</h2>
+          <p class="panel-copy">${escapeHtml(t('snapshot_body'))}</p>
         </div>
         <div class="pill-row">
-          ${statusBadge(`Parent-child ${summary.moderation.parentChildLinks}`, 'teal')}
-          ${statusBadge(`Open reports ${summary.moderation.openReports}`, summary.moderation.openReports > 0 ? 'danger' : 'teal')}
-          ${statusBadge(`Test-like ${summary.messages.recentTestLike}`, summary.messages.recentTestLike > 0 ? 'danger' : '')}
+          ${statusBadge(t('badge_parent_child', { count: summary.moderation.parentChildLinks }), 'teal')}
+          ${statusBadge(t('badge_open_reports', { count: summary.moderation.openReports }), summary.moderation.openReports > 0 ? 'danger' : 'teal')}
+          ${statusBadge(t('badge_test_like', { count: summary.messages.recentTestLike }), summary.messages.recentTestLike > 0 ? 'danger' : '')}
         </div>
       </div>
       <div class="kpi-grid">
-        ${renderKpi('Users', summary.users.total, `Parent ${summary.users.parents} / Child ${summary.users.children}`)}
-        ${renderKpi('Rooms', summary.rooms.total, `Direct ${summary.rooms.direct} / Group ${summary.rooms.group}`)}
-        ${renderKpi('Messages', summary.messages.total, `Text ${summary.messages.text} / Media ${summary.messages.image + summary.messages.video}`)}
-        ${renderKpi('Storage', formatBytes(summary.storage.trackedBytes), `Disk ${formatBytes(summary.storage.actualDiskBytes)}`)}
+        ${renderKpi(t('kpi_users'), summary.users.total, t('kpi_users_sub', { parents: summary.users.parents, children: summary.users.children }))}
+        ${renderKpi(t('kpi_rooms'), summary.rooms.total, t('kpi_rooms_sub', { direct: summary.rooms.direct, group: summary.rooms.group }))}
+        ${renderKpi(t('kpi_messages'), summary.messages.total, t('kpi_messages_sub', { text: summary.messages.text, media: summary.messages.image + summary.messages.video }))}
+        ${renderKpi(t('kpi_storage'), formatBytes(summary.storage.trackedBytes), t('kpi_storage_sub', { bytes: formatBytes(summary.storage.actualDiskBytes) }))}
       </div>
     </section>
 
@@ -611,8 +1111,8 @@ function renderDashboard() {
       <section class="panel">
         <div class="panel-header">
           <div>
-            <h2 class="panel-title">Family Links</h2>
-            <p class="panel-copy">Use active parent-child links to narrow message review to children.</p>
+            <h2 class="panel-title">${escapeHtml(t('family_links_title'))}</h2>
+            <p class="panel-copy">${escapeHtml(t('family_links_body'))}</p>
           </div>
         </div>
         <div class="card-list">
@@ -631,18 +1131,18 @@ function renderDashboard() {
                     `
                   )
                   .join('')
-              : '<div class="empty-state">No active parent-child links were found.</div>'
+              : `<div class="empty-state">${escapeHtml(t('no_family_links'))}</div>`
           }
         </div>
       </section>
 
       <div class="mini-grid">
         <section class="mini-panel">
-          <h3>Storage Alerts</h3>
-          <p>Review orphan files and missing tracked uploads together.</p>
+          <h3>${escapeHtml(t('storage_alerts_title'))}</h3>
+          <p>${escapeHtml(t('storage_alerts_body'))}</p>
           <div class="stat-grid">
-            ${statusBadge(`Orphan files ${summary.storage.orphanFileCount}`, summary.storage.orphanFileCount > 0 ? 'danger' : 'teal')}
-            ${statusBadge(`Missing tracked ${summary.storage.missingTrackedFileCount}`, summary.storage.missingTrackedFileCount > 0 ? 'danger' : 'teal')}
+            ${statusBadge(t('kpi_orphans', { count: summary.storage.orphanFileCount }), summary.storage.orphanFileCount > 0 ? 'danger' : 'teal')}
+            ${statusBadge(t('kpi_orphans_sub', { count: summary.storage.missingTrackedFileCount }), summary.storage.missingTrackedFileCount > 0 ? 'danger' : 'teal')}
           </div>
           <div class="card-list" style="margin-top:12px">
             ${
@@ -657,14 +1157,14 @@ function renderDashboard() {
                       `
                     )
                     .join('')
-                : '<div class="empty-state">No orphan files are currently detected.</div>'
+                : `<div class="empty-state">${escapeHtml(t('no_orphan_files'))}</div>`
             }
           </div>
         </section>
 
         <section class="mini-panel">
-          <h3>Top Storage Users</h3>
-          <p>Largest completed media owners first.</p>
+          <h3>${escapeHtml(t('top_storage_users_title'))}</h3>
+          <p>${escapeHtml(t('top_storage_users_body'))}</p>
           <div class="card-list">
             ${
               summary.topStorageUsers.length
@@ -679,13 +1179,13 @@ function renderDashboard() {
                           <div class="muted">${escapeHtml(user.email)}</div>
                           <div class="message-foot" style="margin-top:10px">
                             <span class="chip">${formatBytes(user.storageBytes)}</span>
-                            <span class="chip">${user.assetCount} assets</span>
+                            <span class="chip">${escapeHtml(t('assets_count', { count: user.assetCount }))}</span>
                           </div>
                         </article>
                       `
                     )
                     .join('')
-                : '<div class="empty-state">No completed upload assets yet.</div>'
+                : `<div class="empty-state">${escapeHtml(t('no_upload_assets'))}</div>`
             }
           </div>
         </section>
@@ -694,7 +1194,7 @@ function renderDashboard() {
   `
 }
 
-function renderUserOptions(selectedValue, includeBlankLabel = 'All users') {
+function renderUserOptions(selectedValue, includeBlankLabel = t('all_users')) {
   return `
     <option value="">${escapeHtml(includeBlankLabel)}</option>
     ${state.users
@@ -716,31 +1216,31 @@ function renderUsers() {
     <section class="panel section-stack">
       <div class="panel-header">
         <div>
-          <h2 class="panel-title">User Management</h2>
-          <p class="panel-copy">Update display name, status, phone, locale, and role, then revoke sessions when needed.</p>
+          <h2 class="panel-title">${escapeHtml(t('users_title'))}</h2>
+          <p class="panel-copy">${escapeHtml(t('users_body'))}</p>
         </div>
       </div>
 
       <form id="user-filter-form" class="form-grid">
         <div class="wide-field">
-          <label for="user-q">Search</label>
-          <input class="input" id="user-q" name="q" value="${escapeHtml(state.filters.users.q)}" placeholder="email, display name, phone" />
+          <label for="user-q">${escapeHtml(t('search_label'))}</label>
+          <input class="input" id="user-q" name="q" value="${escapeHtml(state.filters.users.q)}" placeholder="${escapeHtml(t('search_users_placeholder'))}" />
         </div>
         <div class="field">
-          <label for="user-role">Role</label>
+          <label for="user-role">${escapeHtml(t('role_filter_label'))}</label>
           <select class="select" id="user-role" name="role">
-            <option value="">All</option>
-            <option value="parent" ${state.filters.users.role === 'parent' ? 'selected' : ''}>Parent</option>
-            <option value="user" ${state.filters.users.role === 'user' ? 'selected' : ''}>User</option>
+            <option value="">${escapeHtml(t('all_option'))}</option>
+            <option value="parent" ${state.filters.users.role === 'parent' ? 'selected' : ''}>${escapeHtml(t('role_parent'))}</option>
+            <option value="user" ${state.filters.users.role === 'user' ? 'selected' : ''}>${escapeHtml(t('role_user'))}</option>
           </select>
         </div>
         <div class="field">
-          <label for="user-limit">Limit</label>
+          <label for="user-limit">${escapeHtml(t('limit_label'))}</label>
           <input class="input" id="user-limit" name="limit" type="number" min="1" max="200" value="${escapeHtml(state.filters.users.limit)}" />
         </div>
         <div class="button-row">
-          <button class="button primary" type="submit">Load Users</button>
-          <button class="button ghost" type="button" data-action="refresh-users">Refresh</button>
+          <button class="button primary" type="submit">${escapeHtml(t('load_users'))}</button>
+          <button class="button ghost" type="button" data-action="refresh-users">${escapeHtml(t('refresh'))}</button>
         </div>
       </form>
 
@@ -748,12 +1248,12 @@ function renderUsers() {
         <table class="data-table">
           <thead>
             <tr>
-              <th>User</th>
-              <th>Role</th>
-              <th>Activity</th>
-              <th>Storage</th>
-              <th>Meta</th>
-              <th>Actions</th>
+              <th>${escapeHtml(t('table_user'))}</th>
+              <th>${escapeHtml(t('table_role'))}</th>
+              <th>${escapeHtml(t('table_activity'))}</th>
+              <th>${escapeHtml(t('table_storage'))}</th>
+              <th>${escapeHtml(t('table_meta'))}</th>
+              <th>${escapeHtml(t('table_actions'))}</th>
             </tr>
           </thead>
           <tbody>
@@ -766,28 +1266,28 @@ function renderUsers() {
                           <td>
                             <strong>${escapeHtml(user.effectiveName)}</strong>
                             <div class="muted">${escapeHtml(user.email)}</div>
-                            <div class="muted">${user.phoneE164 ? escapeHtml(user.phoneE164) : 'No phone set'}</div>
+                            <div class="muted">${user.phoneE164 ? escapeHtml(user.phoneE164) : escapeHtml(t('no_phone'))}</div>
                           </td>
                           <td>${roleBadge(user.role)}</td>
                           <td>
                             <div class="stack">
-                              <span>${user.roomCount} rooms</span>
-                              <span>${user.messageCount} messages</span>
-                              <span>${user.familyLinkCount} family links</span>
+                              <span>${escapeHtml(t('rooms_count', { count: user.roomCount }))}</span>
+                              <span>${escapeHtml(t('messages_count', { count: user.messageCount }))}</span>
+                              <span>${escapeHtml(t('family_links_count', { count: user.familyLinkCount }))}</span>
                             </div>
                           </td>
                           <td>${formatBytes(user.storageBytes)}</td>
                           <td>
                             <div class="stack muted">
                               <span>${user.locale || '-'}</span>
-                              <span>${user.statusMessage ? escapeHtml(user.statusMessage) : 'No status message'}</span>
+                              <span>${user.statusMessage ? escapeHtml(user.statusMessage) : escapeHtml(t('no_status'))}</span>
                               <span>${formatDate(user.updatedAt)}</span>
                             </div>
                           </td>
                           <td>
                             <div class="button-row">
-                              <button class="button secondary" type="button" data-edit-user="${escapeHtml(user.id)}">Edit</button>
-                              <button class="button danger" type="button" data-revoke-user="${escapeHtml(user.id)}">Revoke Sessions</button>
+                              <button class="button secondary" type="button" data-edit-user="${escapeHtml(user.id)}">${escapeHtml(t('edit'))}</button>
+                              <button class="button danger" type="button" data-revoke-user="${escapeHtml(user.id)}">${escapeHtml(t('revoke_sessions'))}</button>
                             </div>
                           </td>
                         </tr>
@@ -797,7 +1297,7 @@ function renderUsers() {
                 : `
                   <tr>
                     <td colspan="6">
-                      <div class="empty-state">No users matched this filter.</div>
+                      <div class="empty-state">${escapeHtml(t('no_users_matched'))}</div>
                     </td>
                   </tr>
                 `
@@ -812,39 +1312,39 @@ function renderUsers() {
             <section class="mini-panel">
               <div class="panel-header">
                 <div>
-                  <h3 style="margin:0">Edit ${escapeHtml(draft.effectiveName)}</h3>
-                  <p class="panel-copy">Save writes directly to the users table.</p>
+                  <h3 style="margin:0">${escapeHtml(t('edit_user_title', { name: draft.effectiveName }))}</h3>
+                  <p class="panel-copy">${escapeHtml(t('edit_user_body'))}</p>
                 </div>
-                <button class="button ghost" type="button" data-action="cancel-edit">Close</button>
+                <button class="button ghost" type="button" data-action="cancel-edit">${escapeHtml(t('close'))}</button>
               </div>
               <form id="user-edit-form" class="form-grid">
                 <input type="hidden" name="userId" value="${escapeHtml(draft.id)}" />
                 <div class="field">
-                  <label for="edit-role">Role</label>
+                  <label for="edit-role">${escapeHtml(t('role_filter_label'))}</label>
                   <select class="select" id="edit-role" name="role">
-                    <option value="parent" ${draft.role === 'parent' ? 'selected' : ''}>Parent</option>
-                    <option value="user" ${draft.role === 'user' ? 'selected' : ''}>User</option>
+                    <option value="parent" ${draft.role === 'parent' ? 'selected' : ''}>${escapeHtml(t('role_parent'))}</option>
+                    <option value="user" ${draft.role === 'user' ? 'selected' : ''}>${escapeHtml(t('role_user'))}</option>
                   </select>
                 </div>
                 <div class="wide-field">
-                  <label for="edit-name">Display Name</label>
+                  <label for="edit-name">${escapeHtml(t('display_name_label'))}</label>
                   <input class="input" id="edit-name" name="displayName" value="${escapeHtml(draft.displayName || '')}" />
                 </div>
                 <div class="field">
-                  <label for="edit-phone">Phone E.164</label>
+                  <label for="edit-phone">${escapeHtml(t('phone_label'))}</label>
                   <input class="input" id="edit-phone" name="phoneE164" value="${escapeHtml(draft.phoneE164 || '')}" placeholder="+821012345678" />
                 </div>
                 <div class="field">
-                  <label for="edit-locale">Locale</label>
+                  <label for="edit-locale">${escapeHtml(t('locale_label'))}</label>
                   <input class="input" id="edit-locale" name="locale" value="${escapeHtml(draft.locale || '')}" placeholder="ko-KR" />
                 </div>
                 <div class="wide-field">
-                  <label for="edit-status">Status Message</label>
+                  <label for="edit-status">${escapeHtml(t('status_message_label'))}</label>
                   <textarea class="textarea" id="edit-status" name="statusMessage">${escapeHtml(draft.statusMessage || '')}</textarea>
                 </div>
                 <div class="button-row">
-                  <button class="button primary" type="submit">Save</button>
-                  <button class="button ghost" type="button" data-action="cancel-edit">Cancel</button>
+                  <button class="button primary" type="submit">${escapeHtml(t('save'))}</button>
+                  <button class="button ghost" type="button" data-action="cancel-edit">${escapeHtml(t('cancel'))}</button>
                 </div>
               </form>
             </section>
@@ -863,24 +1363,24 @@ function renderRooms() {
     <section class="panel section-stack">
       <div class="panel-header">
         <div>
-          <h2 class="panel-title">Message Review</h2>
-          <p class="panel-copy">Parents can review room history, inspect children conversations, and clean up test data.</p>
+          <h2 class="panel-title">${escapeHtml(t('message_review_title'))}</h2>
+          <p class="panel-copy">${escapeHtml(t('message_review_body'))}</p>
         </div>
       </div>
 
       <form id="room-filter-form" class="form-grid">
         <div class="field">
-          <label for="room-type">Room Type</label>
+          <label for="room-type">${escapeHtml(t('room_type_label'))}</label>
           <select class="select" id="room-type" name="type">
-            <option value="">All</option>
-            <option value="direct" ${state.filters.rooms.type === 'direct' ? 'selected' : ''}>Direct</option>
-            <option value="group" ${state.filters.rooms.type === 'group' ? 'selected' : ''}>Group</option>
+            <option value="">${escapeHtml(t('all_option'))}</option>
+            <option value="direct" ${state.filters.rooms.type === 'direct' ? 'selected' : ''}>${escapeHtml(t('room_type_direct'))}</option>
+            <option value="group" ${state.filters.rooms.type === 'group' ? 'selected' : ''}>${escapeHtml(t('room_type_group'))}</option>
           </select>
         </div>
         <div class="wide-field">
-          <label for="room-member">Child Filter</label>
+          <label for="room-member">${escapeHtml(t('child_filter_label'))}</label>
           <select class="select" id="room-member" name="memberUserId">
-            <option value="">All linked children</option>
+            <option value="">${escapeHtml(t('all_linked_children'))}</option>
             ${state.familyLinks
               .map(
                 (link) => `
@@ -893,35 +1393,35 @@ function renderRooms() {
           </select>
         </div>
         <div class="wide-field">
-          <label for="room-q">Search</label>
-          <input class="input" id="room-q" name="q" value="${escapeHtml(state.filters.rooms.q)}" placeholder="room title, member name, or email" />
+          <label for="room-q">${escapeHtml(t('search_label'))}</label>
+          <input class="input" id="room-q" name="q" value="${escapeHtml(state.filters.rooms.q)}" placeholder="${escapeHtml(t('room_search_placeholder'))}" />
         </div>
         <div class="field">
-          <label for="room-limit">Limit</label>
+          <label for="room-limit">${escapeHtml(t('limit_label'))}</label>
           <input class="input" id="room-limit" name="limit" type="number" min="1" max="120" value="${escapeHtml(state.filters.rooms.limit)}" />
         </div>
         <div class="button-row">
-          <button class="button primary" type="submit">Load Rooms</button>
-          <button class="button ghost" type="button" data-action="refresh-rooms">Refresh</button>
+          <button class="button primary" type="submit">${escapeHtml(t('load_rooms'))}</button>
+          <button class="button ghost" type="button" data-action="refresh-rooms">${escapeHtml(t('refresh'))}</button>
         </div>
       </form>
 
       <section class="mini-panel">
         <div class="panel-header">
           <div>
-            <h3 style="margin:0">Bulk Test Message Cleanup</h3>
-            <p class="panel-copy">Default search is set to the word "test". Preview first, then run delete only after confirmation.</p>
+            <h3 style="margin:0">${escapeHtml(t('bulk_cleanup_title'))}</h3>
+            <p class="panel-copy">${escapeHtml(t('bulk_cleanup_body'))}</p>
           </div>
         </div>
         <form id="bulk-delete-form" class="form-grid">
           <div class="wide-field">
-            <label for="bulk-searchText">Search Text</label>
+            <label for="bulk-searchText">${escapeHtml(t('search_text_label'))}</label>
             <input class="input" id="bulk-searchText" name="searchText" value="${escapeHtml(state.filters.bulkDelete.searchText)}" placeholder="test" />
           </div>
           <div class="field">
-            <label for="bulk-roomId">Room</label>
+            <label for="bulk-roomId">${escapeHtml(t('room_label'))}</label>
             <select class="select" id="bulk-roomId" name="roomId">
-              <option value="">All rooms</option>
+              <option value="">${escapeHtml(t('all_rooms'))}</option>
               ${state.rooms
                 .map(
                   (room) => `
@@ -934,28 +1434,28 @@ function renderRooms() {
             </select>
           </div>
           <div class="field">
-            <label for="bulk-senderId">Sender</label>
+            <label for="bulk-senderId">${escapeHtml(t('sender_label'))}</label>
             <select class="select" id="bulk-senderId" name="senderId">
               ${renderUserOptions(state.filters.bulkDelete.senderId)}
             </select>
           </div>
           <div class="field">
-            <label for="bulk-before">Before</label>
+            <label for="bulk-before">${escapeHtml(t('before_label'))}</label>
             <input class="input" id="bulk-before" name="before" type="datetime-local" value="${escapeHtml(state.filters.bulkDelete.before)}" />
           </div>
           <div class="field">
-            <label for="bulk-limit">Limit</label>
+            <label for="bulk-limit">${escapeHtml(t('limit_label'))}</label>
             <input class="input" id="bulk-limit" name="limit" type="number" min="1" max="500" value="${escapeHtml(state.filters.bulkDelete.limit)}" />
           </div>
           <div class="wide-field">
-            <label>Message Kinds</label>
+            <label>${escapeHtml(t('message_kinds_label'))}</label>
             <div class="filter-row">
               ${['text', 'system', 'image', 'video']
                 .map(
                   (kind) => `
                     <label class="chip">
                       <input type="checkbox" name="kinds" value="${kind}" ${bulkKinds.has(kind) ? 'checked' : ''} />
-                      ${kind}
+                      ${escapeHtml(messageKindLabel(kind))}
                     </label>
                   `
                 )
@@ -963,8 +1463,8 @@ function renderRooms() {
             </div>
           </div>
           <div class="button-row">
-            <button class="button secondary" type="submit" name="mode" value="preview">Preview</button>
-            <button class="button danger" type="submit" name="mode" value="delete">Delete Matches</button>
+            <button class="button secondary" type="submit" name="mode" value="preview">${escapeHtml(t('preview'))}</button>
+            <button class="button danger" type="submit" name="mode" value="delete">${escapeHtml(t('delete_matches'))}</button>
           </div>
         </form>
         ${
@@ -973,10 +1473,10 @@ function renderRooms() {
               <div class="card-list" style="margin-top:16px">
                 <article class="info-card">
                   <div class="message-head">
-                    <strong>Preview Result</strong>
-                    ${statusBadge(`${state.bulkDeletePreview.matchedCount} matches`, state.bulkDeletePreview.deletedCount > 0 ? 'danger' : 'teal')}
+                    <strong>${escapeHtml(t('preview_result'))}</strong>
+                    ${statusBadge(t('matches_count', { count: state.bulkDeletePreview.matchedCount }), state.bulkDeletePreview.deletedCount > 0 ? 'danger' : 'teal')}
                   </div>
-                  <div class="muted">${state.bulkDeletePreview.dryRun ? 'Preview only. No delete has been executed yet.' : `${state.bulkDeletePreview.deletedCount} messages were deleted.`}</div>
+                  <div class="muted">${escapeHtml(state.bulkDeletePreview.dryRun ? t('preview_only') : t('messages_deleted_count', { count: state.bulkDeletePreview.deletedCount }))}</div>
                 </article>
                 ${
                   state.bulkDeletePreview.items.length
@@ -986,16 +1486,16 @@ function renderRooms() {
                           (message) => `
                             <article class="info-card">
                               <div class="message-head">
-                                <strong>${escapeHtml(message.senderName)} | ${escapeHtml(message.kind)}</strong>
+                                <strong>${escapeHtml(message.senderName)} | ${escapeHtml(messageKindLabel(message.kind))}</strong>
                                 <span class="chip">${formatDate(message.createdAt)}</span>
                               </div>
                               <div class="muted">${escapeHtml(message.roomTitle || message.roomId)}</div>
-                              <div class="message-body">${escapeHtml(message.text || message.uri || '(empty content)')}</div>
+                              <div class="message-body">${escapeHtml(message.text || message.uri || t('empty_content'))}</div>
                             </article>
                           `
                         )
                         .join('')
-                    : '<div class="empty-state">No messages matched the bulk filter.</div>'
+                    : `<div class="empty-state">${escapeHtml(t('no_bulk_matches'))}</div>`
                 }
               </div>
             `
@@ -1007,8 +1507,8 @@ function renderRooms() {
         <section class="mini-panel">
           <div class="panel-header">
             <div>
-              <h3 style="margin:0">Rooms</h3>
-              <p class="panel-copy">Choose a room to inspect message history.</p>
+              <h3 style="margin:0">${escapeHtml(t('rooms_title'))}</h3>
+              <p class="panel-copy">${escapeHtml(t('rooms_body'))}</p>
             </div>
           </div>
           <div class="room-list">
@@ -1020,17 +1520,17 @@ function renderRooms() {
                         <button class="room-card ${room.id === state.selectedRoomId ? 'is-selected' : ''}" type="button" data-select-room="${escapeHtml(room.id)}">
                           <div class="room-title">${escapeHtml(room.title)}</div>
                           <div class="room-meta">
-                            ${statusBadge(room.type, room.type === 'group' ? 'teal' : '')}
-                            <span class="chip">${room.messageCount} messages</span>
-                            <span class="chip">${room.activeMemberCount} members</span>
+                            ${statusBadge(roomTypeLabel(room.type), room.type === 'group' ? 'teal' : '')}
+                            <span class="chip">${escapeHtml(t('messages_count', { count: room.messageCount }))}</span>
+                            <span class="chip">${escapeHtml(t('members_count', { count: room.activeMemberCount }))}</span>
                           </div>
                           <div class="muted" style="margin-top:10px">${escapeHtml(room.members.map((member) => member.name).join(', '))}</div>
-                          <div class="muted" style="margin-top:8px">${room.lastMessage ? escapeHtml(`${room.lastMessage.senderName}: ${room.lastMessage.preview || room.lastMessage.kind}`) : 'No messages yet'}</div>
+                          <div class="muted" style="margin-top:8px">${room.lastMessage ? escapeHtml(`${room.lastMessage.senderName}: ${room.lastMessage.preview || messageKindLabel(room.lastMessage.kind)}`) : escapeHtml(t('no_messages_yet'))}</div>
                         </button>
                       `
                     )
                     .join('')
-                : '<div class="empty-state">No rooms matched this filter.</div>'
+                : `<div class="empty-state">${escapeHtml(t('no_rooms_matched'))}</div>`
             }
           </div>
         </section>
@@ -1038,10 +1538,10 @@ function renderRooms() {
         <section class="mini-panel">
           <div class="panel-header">
             <div>
-              <h3 style="margin:0">${selectedRoom ? escapeHtml(selectedRoom.title) : 'Select a room'}</h3>
-              <p class="panel-copy">${selectedRoom ? `${selectedRoom.members.map((member) => member.name).join(', ')}` : 'Select a room on the left to load messages.'}</p>
+              <h3 style="margin:0">${selectedRoom ? escapeHtml(selectedRoom.title) : escapeHtml(t('select_room'))}</h3>
+              <p class="panel-copy">${selectedRoom ? `${selectedRoom.members.map((member) => member.name).join(', ')}` : escapeHtml(t('select_room_body'))}</p>
             </div>
-            ${selectedRoom ? '<button class="button ghost" type="button" data-action="refresh-room-messages">Refresh Messages</button>' : ''}
+            ${selectedRoom ? `<button class="button ghost" type="button" data-action="refresh-room-messages">${escapeHtml(t('refresh_messages'))}</button>` : ''}
           </div>
           <div class="message-list">
             ${
@@ -1054,24 +1554,24 @@ function renderRooms() {
                             <div class="message-head">
                               <strong>${escapeHtml(message.senderName)}</strong>
                               <div class="filter-row">
-                                ${statusBadge(message.kind, message.kind === 'system' ? 'teal' : '')}
+                                ${statusBadge(messageKindLabel(message.kind), message.kind === 'system' ? 'teal' : '')}
                                 <span class="chip">${formatDate(message.createdAt)}</span>
                               </div>
                             </div>
-                            <div class="message-body">${escapeHtml(message.text || '(no text payload)')}</div>
+                            <div class="message-body">${escapeHtml(message.text || t('no_text_payload'))}</div>
                             ${message.uri ? `<div class="message-media">${escapeHtml(message.uri)}</div>` : ''}
                             <div class="message-foot" style="margin-top:12px">
-                              <span class="muted">${escapeHtml(message.delivery)}</span>
-                              <button class="button danger" type="button" data-delete-message="${escapeHtml(message.id)}">Delete</button>
+                              <span class="muted">${escapeHtml(deliveryLabel(message.delivery))}</span>
+                              <button class="button danger" type="button" data-delete-message="${escapeHtml(message.id)}">${escapeHtml(t('delete'))}</button>
                             </div>
                           </article>
                         `
                       )
                       .join('')
-                  : '<div class="room-empty">No messages loaded for this room.</div>'
-                : '<div class="room-empty">Select a room.</div>'
+                  : `<div class="room-empty">${escapeHtml(t('no_messages_loaded'))}</div>`
+                : `<div class="room-empty">${escapeHtml(t('select_room'))}</div>`
             }
-            ${selectedRoom && state.roomMessages.nextBefore ? '<button class="button ghost" type="button" data-action="load-older">Load Older Messages</button>' : ''}
+            ${selectedRoom && state.roomMessages.nextBefore ? `<button class="button ghost" type="button" data-action="load-older">${escapeHtml(t('load_older_messages'))}</button>` : ''}
           </div>
         </section>
       </div>
@@ -1086,12 +1586,12 @@ function renderStorage() {
     <section class="panel section-stack">
       <div class="panel-header">
         <div>
-          <h2 class="panel-title">Storage Management</h2>
-          <p class="panel-copy">Review tracked uploads, unreferenced assets, and disk-only files together.</p>
+          <h2 class="panel-title">${escapeHtml(t('storage_title'))}</h2>
+          <p class="panel-copy">${escapeHtml(t('storage_body'))}</p>
         </div>
         <div class="button-row">
-          <button class="button secondary" type="button" data-action="refresh-storage">Refresh</button>
-          <button class="button danger" type="button" data-action="cleanup-orphans">Delete Orphan Files</button>
+          <button class="button secondary" type="button" data-action="refresh-storage">${escapeHtml(t('refresh'))}</button>
+          <button class="button danger" type="button" data-action="cleanup-orphans">${escapeHtml(t('delete_orphan_files'))}</button>
         </div>
       </div>
 
@@ -1099,23 +1599,23 @@ function renderStorage() {
         overview
           ? `
             <div class="kpi-grid">
-              ${renderKpi('Tracked', overview.totals.trackedAssets, `Completed ${overview.totals.completedAssets} / Pending ${overview.totals.pendingAssets}`)}
-              ${renderKpi('Tracked Bytes', formatBytes(overview.totals.trackedBytes), `Disk ${formatBytes(overview.totals.actualDiskBytes)}`)}
-              ${renderKpi('Orphans', overview.totals.orphanFileCount, `Missing tracked ${overview.totals.missingTrackedFileCount}`)}
-              ${renderKpi('Failed Assets', overview.totals.failedAssets, 'Rows with failed status')}
+              ${renderKpi(t('kpi_tracked'), overview.totals.trackedAssets, t('kpi_tracked_sub', { completed: overview.totals.completedAssets, pending: overview.totals.pendingAssets }))}
+              ${renderKpi(t('kpi_tracked_bytes'), formatBytes(overview.totals.trackedBytes), t('kpi_storage_sub', { bytes: formatBytes(overview.totals.actualDiskBytes) }))}
+              ${renderKpi(t('kpi_orphans'), overview.totals.orphanFileCount, t('kpi_orphans_sub', { count: overview.totals.missingTrackedFileCount }))}
+              ${renderKpi(t('kpi_failed_assets'), overview.totals.failedAssets, t('kpi_failed_assets_sub'))}
             </div>
 
             <div class="split-grid">
               <section class="mini-panel">
-                <h3>By Kind</h3>
+                <h3>${escapeHtml(t('by_kind_title'))}</h3>
                 <div class="card-list">
                   ${overview.byKind
                     .map(
                       (item) => `
                         <article class="info-card">
                           <div class="message-head">
-                            <strong>${escapeHtml(item.kind)}</strong>
-                            <span class="chip">${item.assetCount} assets</span>
+                            <strong>${escapeHtml(assetKindLabel(item.kind))}</strong>
+                            <span class="chip">${escapeHtml(t('assets_count', { count: item.assetCount }))}</span>
                           </div>
                           <div class="muted">${formatBytes(item.totalBytes)}</div>
                         </article>
@@ -1125,7 +1625,7 @@ function renderStorage() {
                 </div>
               </section>
               <section class="mini-panel">
-                <h3>Top Users</h3>
+                <h3>${escapeHtml(t('top_users_title'))}</h3>
                 <div class="card-list">
                   ${overview.topUsers
                     .map(
@@ -1136,7 +1636,7 @@ function renderStorage() {
                             <span class="chip">${formatBytes(user.storageBytes)}</span>
                           </div>
                           <div class="muted">${escapeHtml(user.email)}</div>
-                          <div class="muted">${user.assetCount} assets</div>
+                          <div class="muted">${escapeHtml(t('assets_count', { count: user.assetCount }))}</div>
                         </article>
                       `
                     )
@@ -1145,37 +1645,37 @@ function renderStorage() {
               </section>
             </div>
           `
-          : '<div class="empty-state">Loading storage overview.</div>'
+          : `<div class="empty-state">${escapeHtml(t('loading_storage_overview'))}</div>`
       }
 
       <form id="storage-filter-form" class="form-grid">
         <div class="wide-field">
-          <label for="storage-ownerUserId">Owner</label>
+          <label for="storage-ownerUserId">${escapeHtml(t('owner_label'))}</label>
           <select class="select" id="storage-ownerUserId" name="ownerUserId">
-            ${renderUserOptions(state.filters.storage.ownerUserId, 'All owners')}
+            ${renderUserOptions(state.filters.storage.ownerUserId, t('all_owners'))}
           </select>
         </div>
         <div class="field">
-          <label for="storage-status">Status</label>
+          <label for="storage-status">${escapeHtml(t('status_label'))}</label>
           <select class="select" id="storage-status" name="status">
-            <option value="">All</option>
-            <option value="completed" ${state.filters.storage.status === 'completed' ? 'selected' : ''}>Completed</option>
-            <option value="pending" ${state.filters.storage.status === 'pending' ? 'selected' : ''}>Pending</option>
-            <option value="failed" ${state.filters.storage.status === 'failed' ? 'selected' : ''}>Failed</option>
+            <option value="">${escapeHtml(t('all_option'))}</option>
+            <option value="completed" ${state.filters.storage.status === 'completed' ? 'selected' : ''}>${escapeHtml(t('asset_status_completed'))}</option>
+            <option value="pending" ${state.filters.storage.status === 'pending' ? 'selected' : ''}>${escapeHtml(t('asset_status_pending'))}</option>
+            <option value="failed" ${state.filters.storage.status === 'failed' ? 'selected' : ''}>${escapeHtml(t('asset_status_failed'))}</option>
           </select>
         </div>
         <div class="field">
-          <label for="storage-limit">Limit</label>
+          <label for="storage-limit">${escapeHtml(t('limit_label'))}</label>
           <input class="input" id="storage-limit" name="limit" type="number" min="1" max="200" value="${escapeHtml(state.filters.storage.limit)}" />
         </div>
         <div class="field">
           <label class="chip" style="margin-top:28px">
             <input type="checkbox" name="unreferencedOnly" ${state.filters.storage.unreferencedOnly ? 'checked' : ''} />
-            unreferenced only
+            ${escapeHtml(t('unreferenced_only'))}
           </label>
         </div>
         <div class="button-row">
-          <button class="button primary" type="submit">Load Assets</button>
+          <button class="button primary" type="submit">${escapeHtml(t('load_assets'))}</button>
         </div>
       </form>
 
@@ -1183,12 +1683,12 @@ function renderStorage() {
         <table class="data-table">
           <thead>
             <tr>
-              <th>Owner</th>
-              <th>Asset</th>
-              <th>References</th>
-              <th>File State</th>
-              <th>Updated</th>
-              <th>Action</th>
+              <th>${escapeHtml(t('table_owner'))}</th>
+              <th>${escapeHtml(t('table_asset'))}</th>
+              <th>${escapeHtml(t('table_references'))}</th>
+              <th>${escapeHtml(t('table_file_state'))}</th>
+              <th>${escapeHtml(t('table_updated'))}</th>
+              <th>${escapeHtml(t('table_actions'))}</th>
             </tr>
           </thead>
           <tbody>
@@ -1204,7 +1704,7 @@ function renderStorage() {
                           </td>
                           <td>
                             <div class="stack">
-                              <span>${statusBadge(asset.kind, asset.kind === 'video' ? 'teal' : '')}</span>
+                              <span>${statusBadge(assetKindLabel(asset.kind), asset.kind === 'video' ? 'teal' : '')}</span>
                               <span>${escapeHtml(asset.mimeType)}</span>
                               <span>${formatBytes(asset.sizeBytes)}</span>
                               <span class="muted">${escapeHtml(asset.fileUrl)}</span>
@@ -1212,14 +1712,14 @@ function renderStorage() {
                           </td>
                           <td>
                             <div class="stack">
-                              <span>${asset.referencedByAvatar ? 'Avatar linked' : 'No avatar link'}</span>
-                              <span>${asset.messageReferenceCount} room message refs</span>
-                              <span>${statusBadge(asset.status, asset.status === 'failed' ? 'danger' : asset.status === 'completed' ? 'teal' : '')}</span>
+                              <span>${escapeHtml(asset.referencedByAvatar ? t('avatar_linked') : t('avatar_not_linked'))}</span>
+                              <span>${escapeHtml(t('room_message_refs', { count: asset.messageReferenceCount }))}</span>
+                              <span>${statusBadge(assetStatusLabel(asset.status), asset.status === 'failed' ? 'danger' : asset.status === 'completed' ? 'teal' : '')}</span>
                             </div>
                           </td>
                           <td>
                             <div class="stack">
-                              <span>${asset.fileExists ? 'File exists' : 'File missing'}</span>
+                              <span>${escapeHtml(asset.fileExists ? t('file_exists') : t('file_missing'))}</span>
                               <span>${asset.actualSizeBytes !== undefined ? formatBytes(asset.actualSizeBytes) : '-'}</span>
                             </div>
                           </td>
@@ -1232,7 +1732,7 @@ function renderStorage() {
                               data-avatar-ref="${asset.referencedByAvatar ? '1' : '0'}"
                               data-message-refs="${asset.messageReferenceCount}"
                             >
-                              Delete
+                              ${escapeHtml(t('delete'))}
                             </button>
                           </td>
                         </tr>
@@ -1242,7 +1742,7 @@ function renderStorage() {
                 : `
                   <tr>
                     <td colspan="6">
-                      <div class="empty-state">No assets matched this filter.</div>
+                      <div class="empty-state">${escapeHtml(t('no_assets_matched'))}</div>
                     </td>
                   </tr>
                 `
@@ -1284,6 +1784,8 @@ function renderConsole() {
 }
 
 function render() {
+  document.documentElement.lang = state.locale
+  document.title = `ourHangout Guardian Console | ${t(`tab_${state.activeTab}_title`)}`
   app.innerHTML = state.session ? renderConsole() : renderLogin()
 
   if (!state.session) {
@@ -1329,12 +1831,18 @@ async function refreshCurrentTab() {
 
 app.addEventListener('click', async (event) => {
   const target = event.target.closest(
-    '[data-tab],[data-action],[data-edit-user],[data-revoke-user],[data-select-room],[data-delete-message],[data-delete-asset]'
+    '[data-tab],[data-action],[data-set-locale],[data-edit-user],[data-revoke-user],[data-select-room],[data-delete-message],[data-delete-asset]'
   )
   if (!target) return
 
   try {
     clearFlash()
+
+    if (target.dataset.setLocale) {
+      setLocale(target.dataset.setLocale)
+      render()
+      return
+    }
 
     if (target.dataset.tab) {
       state.activeTab = target.dataset.tab
@@ -1348,11 +1856,11 @@ app.addEventListener('click', async (event) => {
     }
 
     if (target.dataset.revokeUser) {
-      if (!window.confirm('Revoke all refresh sessions for this user?')) return
+      if (!window.confirm(t('confirm_revoke_sessions'))) return
       const result = await apiRequest(`/v1/guardian/users/${target.dataset.revokeUser}/revoke-sessions`, {
         method: 'POST'
       })
-      setFlash('info', result.revoked ? 'User sessions revoked.' : 'There were no active sessions to revoke.')
+      setFlash('info', result.revoked ? t('flash_sessions_revoked') : t('flash_no_active_sessions'))
       return
     }
 
@@ -1363,11 +1871,11 @@ app.addEventListener('click', async (event) => {
     }
 
     if (target.dataset.deleteMessage) {
-      if (!window.confirm('Delete this message?')) return
+      if (!window.confirm(t('confirm_delete_message'))) return
       await apiRequest(`/v1/guardian/messages/${target.dataset.deleteMessage}`, {
         method: 'DELETE'
       })
-      setFlash('info', 'Message deleted.')
+      setFlash('info', t('flash_message_deleted'))
       await Promise.all([loadRooms(), loadDashboard()])
       return
     }
@@ -1377,17 +1885,17 @@ app.addEventListener('click', async (event) => {
       const avatarRef = target.dataset.avatarRef === '1'
 
       if (messageRefs > 0) {
-        setFlash('error', 'This asset is still referenced by room messages. Delete those messages first.')
+        setFlash('error', t('asset_still_referenced'))
         return
       }
 
       let forceAvatarDetach = false
       if (avatarRef) {
-        forceAvatarDetach = window.confirm('This asset is linked as an avatar. Clear the avatar and continue?')
+        forceAvatarDetach = window.confirm(t('confirm_clear_avatar'))
         if (!forceAvatarDetach) return
       }
 
-      if (!window.confirm('Delete this asset?')) return
+      if (!window.confirm(t('confirm_delete_asset'))) return
 
       await apiRequest(
         `/v1/guardian/storage/assets/${target.dataset.deleteAsset}${buildQuery({ forceAvatarDetach })}`,
@@ -1395,7 +1903,7 @@ app.addEventListener('click', async (event) => {
           method: 'DELETE'
         }
       )
-      setFlash('info', 'Asset deleted.')
+      setFlash('info', t('flash_asset_deleted'))
       await Promise.all([loadStorage(), loadDashboard(), loadUsers()])
       return
     }
@@ -1421,6 +1929,9 @@ app.addEventListener('click', async (event) => {
       case 'refresh-storage':
         await loadStorage()
         return
+      case 'google-switch-account':
+        startGoogleAlternateAccountFlow()
+        return
       case 'cancel-edit':
         state.editDraft = null
         render()
@@ -1429,18 +1940,18 @@ app.addEventListener('click', async (event) => {
         await loadRoomMessages({ reset: false })
         return
       case 'cleanup-orphans':
-        if (!window.confirm('Delete files on disk that are not tracked in media_assets?')) return
+        if (!window.confirm(t('confirm_delete_orphans'))) return
         const cleanup = await apiRequest('/v1/guardian/storage/cleanup-orphans', {
           method: 'POST'
         })
-        setFlash('info', `${cleanup.deletedCount} files deleted, ${formatBytes(cleanup.freedBytes)} reclaimed.`)
+        setFlash('info', t('flash_orphans_deleted', { count: cleanup.deletedCount, bytes: formatBytes(cleanup.freedBytes) }))
         await Promise.all([loadStorage(), loadDashboard()])
         return
       default:
         return
     }
   } catch (error) {
-    setFlash('error', error.message || 'Action failed.')
+    setFlash('error', error.message || t('action_failed'))
   }
 })
 
@@ -1452,12 +1963,6 @@ app.addEventListener('submit', async (event) => {
 
   try {
     clearFlash()
-
-    if (form.id === 'login-form') {
-      const formData = new FormData(form)
-      await login(String(formData.get('email') || ''), String(formData.get('password') || ''))
-      return
-    }
 
     if (form.id === 'user-filter-form') {
       const formData = new FormData(form)
@@ -1484,7 +1989,7 @@ app.addEventListener('submit', async (event) => {
         }
       })
       state.editDraft = null
-      setFlash('info', 'User profile updated.')
+      setFlash('info', t('flash_user_updated'))
       await Promise.all([loadUsers(), loadDashboard(), loadRooms()])
       return
     }
@@ -1515,7 +2020,7 @@ app.addEventListener('submit', async (event) => {
         limit: Number(formData.get('limit') || 80)
       }
 
-      if (mode === 'delete' && !window.confirm('Delete all matched messages?')) return
+      if (mode === 'delete' && !window.confirm(t('confirm_delete_matches'))) return
 
       const result = await apiRequest('/v1/guardian/messages/bulk-delete', {
         method: 'POST',
@@ -1532,7 +2037,7 @@ app.addEventListener('submit', async (event) => {
 
       state.bulkDeletePreview = result
       if (result.deletedCount > 0) {
-        setFlash('info', `${result.deletedCount} messages deleted.`)
+        setFlash('info', t('messages_deleted_count', { count: result.deletedCount }))
         await Promise.all([loadRooms(), loadDashboard()])
       } else {
         render()
@@ -1551,20 +2056,25 @@ app.addEventListener('submit', async (event) => {
       await loadStorage()
     }
   } catch (error) {
-    setFlash('error', error.message || 'Action failed.')
+    setFlash('error', error.message || t('action_failed'))
   }
 })
 
 async function bootstrap() {
   render()
 
-  if (!state.session) return
-
   try {
+    if (!state.session) {
+      const handled = await handleGoogleRedirectResult()
+      if (!handled && !state.session) {
+        return
+      }
+    }
+
     await loadAllData()
   } catch (error) {
     clearSession()
-    setFlash('error', error.message || 'Session validation failed. Please sign in again.')
+    setFlash('error', error.message || t('session_validation_failed'))
   }
 }
 
