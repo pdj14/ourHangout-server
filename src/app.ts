@@ -32,20 +32,22 @@ import { registerErrorHandlers } from './plugins/error-handler';
 import { securityPlugin } from './plugins/security';
 import { swaggerPlugin } from './plugins/swagger';
 
+const MAX_UPLOAD_BODY_BYTES = 200 * 1024 * 1024;
+
 export async function buildServer(): Promise<FastifyInstance> {
   const app = Fastify({
     trustProxy: env.TRUST_PROXY,
-    bodyLimit: 50 * 1024 * 1024,
+    bodyLimit: MAX_UPLOAD_BODY_BYTES,
     logger: {
       level: env.LOG_LEVEL
     }
   });
 
-  app.addContentTypeParser(/^image\/.*/, { parseAs: 'buffer', bodyLimit: 50 * 1024 * 1024 }, (_request, body, done) => {
+  app.addContentTypeParser(/^image\/.*/, { parseAs: 'buffer', bodyLimit: MAX_UPLOAD_BODY_BYTES }, (_request, body, done) => {
     done(null, body);
   });
 
-  app.addContentTypeParser(/^video\/.*/, { parseAs: 'buffer', bodyLimit: 50 * 1024 * 1024 }, (_request, body, done) => {
+  app.addContentTypeParser(/^video\/.*/, { parseAs: 'buffer', bodyLimit: MAX_UPLOAD_BODY_BYTES }, (_request, body, done) => {
     done(null, body);
   });
 

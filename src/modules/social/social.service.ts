@@ -149,6 +149,8 @@ type SocialServiceDeps = {
   logger: FastifyBaseLogger;
 };
 
+const MAX_MEDIA_UPLOAD_BYTES = 200 * 1024 * 1024;
+
 function normalizeName(displayName: string | null, email: string): string {
   if (displayName && displayName.trim().length > 0) {
     return displayName.trim();
@@ -431,8 +433,8 @@ export class SocialService {
     const mimeType = params.mimeType.trim().toLowerCase();
     const size = params.size;
 
-    if (size <= 0 || size > 50 * 1024 * 1024) {
-      throw new AppError(400, ErrorCodes.VALIDATION_ERROR, 'Invalid media size. Allowed range is 1 byte to 50MB.');
+    if (size <= 0 || size > MAX_MEDIA_UPLOAD_BYTES) {
+      throw new AppError(400, ErrorCodes.VALIDATION_ERROR, 'Invalid media size. Allowed range is 1 byte to 200MB.');
     }
 
     if (kind === 'image' && !mimeType.startsWith('image/')) {

@@ -3,6 +3,8 @@ import type { FastifyInstance } from 'fastify';
 import { AppError, ErrorCodes } from '../../lib/errors';
 import type { MessageKind } from './social.types';
 
+const MAX_MEDIA_UPLOAD_BYTES = 200 * 1024 * 1024;
+
 export async function socialRoutes(app: FastifyInstance): Promise<void> {
   app.get(
     '/me',
@@ -56,7 +58,7 @@ export async function socialRoutes(app: FastifyInstance): Promise<void> {
           required: ['mimeType', 'size'],
           properties: {
             mimeType: { type: 'string', minLength: 1, maxLength: 100 },
-            size: { type: 'number', minimum: 1, maximum: 52428800 }
+            size: { type: 'number', minimum: 1, maximum: MAX_MEDIA_UPLOAD_BYTES }
           }
         }
       }
@@ -601,7 +603,7 @@ export async function socialRoutes(app: FastifyInstance): Promise<void> {
           properties: {
             kind: { type: 'string', enum: ['image', 'video', 'avatar'] },
             mimeType: { type: 'string', minLength: 1, maxLength: 100 },
-            size: { type: 'number', minimum: 1, maximum: 52428800 }
+            size: { type: 'number', minimum: 1, maximum: MAX_MEDIA_UPLOAD_BYTES }
           }
         }
       }
@@ -617,7 +619,7 @@ export async function socialRoutes(app: FastifyInstance): Promise<void> {
     '/media/upload',
     {
       preHandler: app.authenticate,
-      bodyLimit: 50 * 1024 * 1024,
+      bodyLimit: MAX_MEDIA_UPLOAD_BYTES,
       schema: {
         tags: ['social'],
         summary: 'Upload media bytes to pending asset URL',
