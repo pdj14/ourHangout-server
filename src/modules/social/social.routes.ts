@@ -30,7 +30,7 @@ export async function socialRoutes(app: FastifyInstance): Promise<void> {
           type: 'object',
           properties: {
             name: { type: 'string', minLength: 1, maxLength: 100 },
-            status: { type: 'string', minLength: 1, maxLength: 200 },
+            status: { type: 'string', maxLength: 200 },
             avatarUri: { type: 'string', maxLength: 1024 },
             locale: { type: 'string', minLength: 2, maxLength: 16 }
           }

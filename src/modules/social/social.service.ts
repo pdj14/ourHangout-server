@@ -135,6 +135,12 @@ type PushRecipientRow = {
   locale: string | null;
 };
 
+type MediaAssetRow = {
+  file_url: string;
+  mime_type: string;
+  size_bytes: number;
+};
+
 type SocialServiceDeps = {
   db: Pool;
   connectionManager: ConnectionManager;
@@ -556,13 +562,24 @@ export class SocialService {
 
   async getCompletedMediaDownload(fileUrl: string): Promise<{ path: string; mimeType: string; size: number }> {
     const normalizedFileUrl = fileUrl.trim();
-    const result = await this.db.query<{ mime_type: string; size_bytes: number }>(
-      `SELECT mime_type, size_bytes
+    let routePath = '';
+    try {
+      routePath = new URL(normalizedFileUrl).pathname;
+    } catch {
+      routePath = normalizedFileUrl.startsWith('/') ? normalizedFileUrl : '';
+    }
+
+    const result = await this.db.query<MediaAssetRow>(
+      `SELECT file_url, mime_type, size_bytes
        FROM media_assets
-       WHERE file_url = $1
-         AND status = 'completed'
+       WHERE status = 'completed'
+         AND (
+           file_url = $1
+           OR ($2 <> '' AND file_url LIKE '%' || $2)
+         )
+       ORDER BY CASE WHEN file_url = $1 THEN 0 ELSE 1 END, updated_at DESC
        LIMIT 1`,
-      [normalizedFileUrl]
+      [normalizedFileUrl, routePath]
     );
 
     const row = result.rows[0];
@@ -570,7 +587,7 @@ export class SocialService {
       throw new AppError(404, ErrorCodes.RESOURCE_NOT_FOUND, 'Media asset not found.');
     }
 
-    const path = resolveMediaStoragePath(normalizedFileUrl);
+    const path = resolveMediaStoragePath(row.file_url);
     const stat = await fs.stat(path).catch(() => null);
     if (!stat?.isFile()) {
       throw new AppError(404, ErrorCodes.RESOURCE_NOT_FOUND, 'Media file not found.');
