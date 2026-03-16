@@ -24,6 +24,9 @@ import { PairingService } from './modules/pairing/pairing.service';
 import { pairingRoutes } from './modules/pairing/pairing.routes';
 import { ContactsService } from './modules/contacts/contacts.service';
 import { contactsRoutes } from './modules/contacts/contacts.routes';
+import { GuardianService } from './modules/guardian/guardian.service';
+import { guardianRoutes } from './modules/guardian/guardian.routes';
+import { guardianConsoleRoutes } from './modules/guardian/guardian.console.routes';
 import { FcmPushService } from './lib/push/fcm-push.service';
 import { registerErrorHandlers } from './plugins/error-handler';
 import { securityPlugin } from './plugins/security';
@@ -32,9 +35,18 @@ import { swaggerPlugin } from './plugins/swagger';
 export async function buildServer(): Promise<FastifyInstance> {
   const app = Fastify({
     trustProxy: env.TRUST_PROXY,
+    bodyLimit: 50 * 1024 * 1024,
     logger: {
       level: env.LOG_LEVEL
     }
+  });
+
+  app.addContentTypeParser(/^image\/.*/, { parseAs: 'buffer', bodyLimit: 50 * 1024 * 1024 }, (_request, body, done) => {
+    done(null, body);
+  });
+
+  app.addContentTypeParser(/^video\/.*/, { parseAs: 'buffer', bodyLimit: 50 * 1024 * 1024 }, (_request, body, done) => {
+    done(null, body);
   });
 
   await app.register(websocket);
@@ -68,11 +80,6 @@ export async function buildServer(): Promise<FastifyInstance> {
     clawBridge,
     logger: app.log
   });
-  const botService = new BotService({
-    db,
-    chatService,
-    logger: app.log
-  });
   const fcmPushService = new FcmPushService(env, app.log);
 
   const socialService = new SocialService({
@@ -80,6 +87,12 @@ export async function buildServer(): Promise<FastifyInstance> {
     connectionManager,
     clawBridge,
     pushService: fcmPushService,
+    logger: app.log
+  });
+  const guardianService = new GuardianService(db, app.log);
+  const botService = new BotService({
+    db,
+    socialService,
     logger: app.log
   });
 
@@ -99,6 +112,7 @@ export async function buildServer(): Promise<FastifyInstance> {
   app.decorate('chatService', chatService);
   app.decorate('botService', botService);
   app.decorate('socialService', socialService);
+  app.decorate('guardianService', guardianService);
 
   registerErrorHandlers(app);
 
@@ -118,9 +132,11 @@ export async function buildServer(): Promise<FastifyInstance> {
   await app.register(contactsRoutes, { prefix: '/v1/contacts' });
   await app.register(chatRoutes, { prefix: '/v1/chats' });
   await app.register(socialRoutes, { prefix: '/v1' });
+  await app.register(guardianRoutes, { prefix: '/v1/guardian' });
   await app.register(botRoutes, { prefix: '/v1/bots' });
   await app.register(websocketRoutes, { prefix: '/v1' });
   await app.register(openClawRoutes, { prefix: '/v1/openclaw' });
+  await app.register(guardianConsoleRoutes);
 
   app.addHook('onReady', async () => {
     await app.eventBus.start(async (event) => {

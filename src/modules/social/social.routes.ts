@@ -1,4 +1,6 @@
+import { createReadStream } from 'fs';
 import type { FastifyInstance } from 'fastify';
+import { AppError, ErrorCodes } from '../../lib/errors';
 import type { MessageKind } from './social.types';
 
 export async function socialRoutes(app: FastifyInstance): Promise<void> {
@@ -28,7 +30,7 @@ export async function socialRoutes(app: FastifyInstance): Promise<void> {
           type: 'object',
           properties: {
             name: { type: 'string', minLength: 1, maxLength: 100 },
-            status: { type: 'string', minLength: 1, maxLength: 200 },
+            status: { type: 'string', maxLength: 200 },
             avatarUri: { type: 'string', maxLength: 1024 },
             locale: { type: 'string', minLength: 2, maxLength: 16 }
           }
@@ -355,14 +357,15 @@ export async function socialRoutes(app: FastifyInstance): Promise<void> {
           type: 'object',
           properties: {
             favorite: { type: 'boolean' },
-            muted: { type: 'boolean' }
+            muted: { type: 'boolean' },
+            title: { type: 'string', minLength: 1, maxLength: 100 }
           }
         }
       }
     },
     async (request) => {
       const params = request.params as { roomId: string };
-      const body = (request.body as { favorite?: boolean; muted?: boolean } | undefined) ?? {};
+      const body = (request.body as { favorite?: boolean; muted?: boolean; title?: string } | undefined) ?? {};
       const data = await app.socialService.updateRoomSettings(request.user.sub, params.roomId, body);
       return { success: true, data };
     }
@@ -610,6 +613,39 @@ export async function socialRoutes(app: FastifyInstance): Promise<void> {
     }
   );
 
+  app.put(
+    '/media/upload',
+    {
+      preHandler: app.authenticate,
+      bodyLimit: 50 * 1024 * 1024,
+      schema: {
+        tags: ['social'],
+        summary: 'Upload media bytes to pending asset URL',
+        querystring: {
+          type: 'object',
+          required: ['fileUrl'],
+          properties: {
+            fileUrl: { type: 'string', minLength: 1, maxLength: 2048 }
+          }
+        }
+      }
+    },
+    async (request, reply) => {
+      const query = request.query as { fileUrl: string };
+      if (!Buffer.isBuffer(request.body)) {
+        throw new AppError(400, ErrorCodes.VALIDATION_ERROR, 'Binary request body is required.');
+      }
+
+      await app.socialService.storeUploadedMedia(request.user.sub, {
+        fileUrl: query.fileUrl,
+        bytes: request.body
+      });
+
+      reply.code(204);
+      return reply.send();
+    }
+  );
+
   app.post(
     '/media/complete',
     {
@@ -631,6 +667,64 @@ export async function socialRoutes(app: FastifyInstance): Promise<void> {
       const body = request.body as { fileUrl: string; kind: 'image' | 'video' | 'avatar' };
       const data = await app.socialService.completeMediaUpload(request.user.sub, body);
       return { success: true, data };
+    }
+  );
+
+  app.get(
+    '/media/files/:year/:month/:fileName',
+    {
+      schema: {
+        tags: ['social'],
+        summary: 'Serve completed media file',
+        params: {
+          type: 'object',
+          required: ['year', 'month', 'fileName'],
+          properties: {
+            year: { type: 'string', minLength: 4, maxLength: 4 },
+            month: { type: 'string', minLength: 2, maxLength: 2 },
+            fileName: { type: 'string', minLength: 1, maxLength: 255 }
+          }
+        }
+      }
+    },
+    async (request, reply) => {
+      const params = request.params as { year: string; month: string; fileName: string };
+      const publicBaseUrl = app.socialService.getMediaPublicBaseUrl();
+      const fileUrl = `${publicBaseUrl}/v1/media/files/${params.year}/${params.month}/${params.fileName}`;
+      const asset = await app.socialService.getCompletedMediaDownload(fileUrl);
+
+      reply.header('Content-Type', asset.mimeType);
+      reply.header('Cache-Control', 'public, max-age=31536000, immutable');
+      reply.header('Accept-Ranges', 'bytes');
+
+      const rangeHeader = request.headers.range;
+      if (rangeHeader) {
+        const match = /bytes=(\d*)-(\d*)/.exec(rangeHeader);
+        if (!match) {
+          reply.code(416);
+          reply.header('Content-Range', `bytes */${asset.size}`);
+          return reply.send();
+        }
+
+        const start = match[1] ? Number(match[1]) : 0;
+        const end = match[2] ? Number(match[2]) : asset.size - 1;
+        const safeStart = Number.isFinite(start) ? start : 0;
+        const safeEnd = Number.isFinite(end) ? Math.min(end, asset.size - 1) : asset.size - 1;
+
+        if (safeStart < 0 || safeEnd < safeStart || safeStart >= asset.size) {
+          reply.code(416);
+          reply.header('Content-Range', `bytes */${asset.size}`);
+          return reply.send();
+        }
+
+        reply.code(206);
+        reply.header('Content-Range', `bytes ${safeStart}-${safeEnd}/${asset.size}`);
+        reply.header('Content-Length', String(safeEnd - safeStart + 1));
+        return reply.send(createReadStream(asset.path, { start: safeStart, end: safeEnd }));
+      }
+
+      reply.header('Content-Length', String(asset.size));
+      return reply.send(createReadStream(asset.path));
     }
   );
 

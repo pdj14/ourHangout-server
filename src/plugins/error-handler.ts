@@ -1,5 +1,6 @@
-﻿import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
+import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import { AppError, ErrorCodes, isAppError } from '../lib/errors';
+import { isGuardianConsoleTokenPayload } from '../modules/guardian/guardian.auth';
 
 function sendError(
   reply: FastifyReply,
@@ -28,7 +29,11 @@ export function registerErrorHandlers(app: FastifyInstance): void {
     }
 
     if ((error as { validation?: unknown }).validation) {
-      sendError(reply, 400, ErrorCodes.VALIDATION_ERROR, 'Request validation failed.',
+      sendError(
+        reply,
+        400,
+        ErrorCodes.VALIDATION_ERROR,
+        'Request validation failed.',
         (error as { validation?: unknown }).validation
       );
       return;
@@ -56,6 +61,18 @@ export function registerErrorHandlers(app: FastifyInstance): void {
       await request.jwtVerify();
     } catch {
       throw new AppError(401, ErrorCodes.AUTH_UNAUTHORIZED, 'Authentication required.');
+    }
+  });
+
+  app.decorate('authenticateGuardian', async (request: FastifyRequest) => {
+    try {
+      await request.jwtVerify();
+    } catch {
+      throw new AppError(401, ErrorCodes.AUTH_UNAUTHORIZED, 'Guardian Console authentication required.');
+    }
+
+    if (!isGuardianConsoleTokenPayload(request.user)) {
+      throw new AppError(403, ErrorCodes.FORBIDDEN, 'Only configured Guardian Console credentials can access this page.');
     }
   });
 }

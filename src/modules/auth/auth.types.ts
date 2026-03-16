@@ -1,7 +1,8 @@
-﻿export interface JwtUserPayload {
+export interface JwtUserPayload {
   sub: string;
   email: string;
   role: string;
+  scope?: string;
 }
 
 export type AuthProvider = 'local' | 'google';

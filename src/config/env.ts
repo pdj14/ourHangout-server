@@ -10,6 +10,8 @@ const envSchema = z.object({
   DATABASE_URL: z.string().min(1),
   REDIS_URL: z.string().min(1),
   JWT_SECRET: z.string().min(32),
+  PUBLIC_BASE_URL: z.string().default(''),
+  MEDIA_STORAGE_DIR: z.string().default('storage/media'),
   GOOGLE_CLIENT_ID: z.string().default(''),
   GOOGLE_CLIENT_IDS: z.string().default(''),
   FCM_PROJECT_ID: z.string().default(''),
@@ -19,6 +21,10 @@ const envSchema = z.object({
   FCM_ANDROID_CHANNEL_ID: z.string().default('messages'),
   ACCESS_TOKEN_TTL: z.string().default('15m'),
   REFRESH_TOKEN_TTL_DAYS: z.coerce.number().int().positive().default(14),
+  GUARDIAN_MASTER_EMAILS: z.string().default('dj14.park@gmail.com'),
+  GUARDIAN_CONSOLE_LOGIN_ID: z.string().default('wowjini0228'),
+  GUARDIAN_CONSOLE_PASSWORD: z.string().default('dj369369'),
+  GUARDIAN_CONSOLE_ACCESS_TOKEN_TTL: z.string().default('7d'),
   CORS_ORIGINS: z.string().default('http://localhost:5173'),
   RATE_LIMIT_MAX: z.coerce.number().int().positive().default(200),
   RATE_LIMIT_WINDOW: z.string().default('1 minute'),
@@ -81,9 +87,15 @@ function parseTrustProxy(value: string): boolean | number | string[] {
 
 export const env = {
   ...rawEnv,
+  PUBLIC_BASE_URL: rawEnv.PUBLIC_BASE_URL.trim() || `http://localhost:${rawEnv.PORT}`,
   TRUST_PROXY: parseTrustProxy(rawEnv.TRUST_PROXY),
   FCM_PRIVATE_KEY: rawEnv.FCM_PRIVATE_KEY.replace(/\\n/g, '\n'),
   CORS_ORIGINS: rawEnv.CORS_ORIGINS.split(',').map((origin) => origin.trim()).filter(Boolean),
+  GUARDIAN_MASTER_EMAILS: rawEnv.GUARDIAN_MASTER_EMAILS
+    .split(',')
+    .map((email) => email.trim().toLowerCase())
+    .filter(Boolean),
+  GUARDIAN_CONSOLE_LOGIN_ID: rawEnv.GUARDIAN_CONSOLE_LOGIN_ID.trim(),
   GOOGLE_CLIENT_IDS: Array.from(
     new Set(
       [

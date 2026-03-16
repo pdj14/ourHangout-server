@@ -1,3 +1,5 @@
+import type { RoomDto } from '../social/social.types';
+
 export interface BotSummary {
   id: string;
   botKey: string;
@@ -11,10 +13,5 @@ export interface BotSummary {
 
 export interface BotRoomResult {
   bot: BotSummary;
-  room: {
-    id: string;
-    userAId: string;
-    userBId: string;
-    createdAt: string;
-  };
+  room: RoomDto;
 }
