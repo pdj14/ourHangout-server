@@ -14,4 +14,5 @@ COPY package*.json ./
 RUN npm install --omit=dev
 COPY --from=base /app/dist ./dist
 COPY --from=base /app/db ./db
+COPY guardian-console ./guardian-console
 CMD ["sh", "-c", "node dist/server.js"]
