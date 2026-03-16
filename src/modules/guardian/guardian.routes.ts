@@ -1,11 +1,73 @@
 import type { FastifyInstance } from 'fastify';
+import { env } from '../../config/env';
+import { AppError, ErrorCodes } from '../../lib/errors';
+import {
+  buildGuardianConsoleJwtPayload,
+  buildGuardianConsoleUser,
+  isGuardianConsoleCredentialMatch
+} from './guardian.auth';
 import type { MessageKind, RoomType } from '../social/social.types';
 
 export async function guardianRoutes(app: FastifyInstance): Promise<void> {
+  const guardianAuth = { preHandler: app.authenticateGuardian };
+
+  app.post(
+    '/auth/login',
+    {
+      schema: {
+        tags: ['guardian'],
+        summary: 'Login to Guardian Console with configured ID/password',
+        body: {
+          type: 'object',
+          required: ['loginId', 'password'],
+          properties: {
+            loginId: { type: 'string', minLength: 1, maxLength: 100 },
+            password: { type: 'string', minLength: 1, maxLength: 200 }
+          }
+        }
+      }
+    },
+    async (request) => {
+      const body = request.body as { loginId: string; password: string };
+
+      if (!isGuardianConsoleCredentialMatch(body.loginId, body.password)) {
+        throw new AppError(401, ErrorCodes.AUTH_INVALID_CREDENTIALS, 'Guardian Console ID or password is incorrect.');
+      }
+
+      const accessToken = app.jwt.sign(buildGuardianConsoleJwtPayload(), {
+        expiresIn: env.GUARDIAN_CONSOLE_ACCESS_TOKEN_TTL
+      });
+
+      return {
+        success: true,
+        data: {
+          accessToken,
+          tokenType: 'Bearer',
+          expiresIn: env.GUARDIAN_CONSOLE_ACCESS_TOKEN_TTL,
+          user: buildGuardianConsoleUser()
+        }
+      };
+    }
+  );
+
+  app.get(
+    '/auth/me',
+    {
+      ...guardianAuth,
+      schema: {
+        tags: ['guardian'],
+        summary: 'Get the current Guardian Console user'
+      }
+    },
+    async () => {
+      return { success: true, data: buildGuardianConsoleUser() };
+    }
+  );
+
   app.get(
     '/summary',
     {
-      preHandler: app.authenticate,
+      ...guardianAuth,
       schema: {
         tags: ['guardian'],
         summary: 'Get Guardian Console dashboard summary'
@@ -20,7 +82,7 @@ export async function guardianRoutes(app: FastifyInstance): Promise<void> {
   app.get(
     '/users',
     {
-      preHandler: app.authenticate,
+      ...guardianAuth,
       schema: {
         tags: ['guardian'],
         summary: 'List users for Guardian Console',
@@ -44,7 +106,7 @@ export async function guardianRoutes(app: FastifyInstance): Promise<void> {
   app.patch(
     '/users/:userId',
     {
-      preHandler: app.authenticate,
+      ...guardianAuth,
       schema: {
         tags: ['guardian'],
         summary: 'Update user profile metadata and role',
@@ -86,7 +148,7 @@ export async function guardianRoutes(app: FastifyInstance): Promise<void> {
   app.post(
     '/users/:userId/revoke-sessions',
     {
-      preHandler: app.authenticate,
+      ...guardianAuth,
       schema: {
         tags: ['guardian'],
         summary: 'Revoke all refresh sessions for a user',
@@ -109,7 +171,7 @@ export async function guardianRoutes(app: FastifyInstance): Promise<void> {
   app.get(
     '/family-links',
     {
-      preHandler: app.authenticate,
+      ...guardianAuth,
       schema: {
         tags: ['guardian'],
         summary: 'List active parent-child links'
@@ -124,7 +186,7 @@ export async function guardianRoutes(app: FastifyInstance): Promise<void> {
   app.get(
     '/rooms',
     {
-      preHandler: app.authenticate,
+      ...guardianAuth,
       schema: {
         tags: ['guardian'],
         summary: 'List rooms for Guardian Console',
@@ -150,7 +212,7 @@ export async function guardianRoutes(app: FastifyInstance): Promise<void> {
   app.get(
     '/rooms/:roomId/messages',
     {
-      preHandler: app.authenticate,
+      ...guardianAuth,
       schema: {
         tags: ['guardian'],
         summary: 'List room messages for Guardian Console',
@@ -187,7 +249,7 @@ export async function guardianRoutes(app: FastifyInstance): Promise<void> {
   app.delete(
     '/messages/:messageId',
     {
-      preHandler: app.authenticate,
+      ...guardianAuth,
       schema: {
         tags: ['guardian'],
         summary: 'Delete one message',
@@ -210,7 +272,7 @@ export async function guardianRoutes(app: FastifyInstance): Promise<void> {
   app.post(
     '/messages/bulk-delete',
     {
-      preHandler: app.authenticate,
+      ...guardianAuth,
       schema: {
         tags: ['guardian'],
         summary: 'Preview or bulk delete matching messages',
@@ -251,7 +313,7 @@ export async function guardianRoutes(app: FastifyInstance): Promise<void> {
   app.get(
     '/storage',
     {
-      preHandler: app.authenticate,
+      ...guardianAuth,
       schema: {
         tags: ['guardian'],
         summary: 'Get Guardian Console storage overview'
@@ -266,7 +328,7 @@ export async function guardianRoutes(app: FastifyInstance): Promise<void> {
   app.get(
     '/storage/assets',
     {
-      preHandler: app.authenticate,
+      ...guardianAuth,
       schema: {
         tags: ['guardian'],
         summary: 'List media assets for storage management',
@@ -298,7 +360,7 @@ export async function guardianRoutes(app: FastifyInstance): Promise<void> {
   app.delete(
     '/storage/assets/:assetId',
     {
-      preHandler: app.authenticate,
+      ...guardianAuth,
       schema: {
         tags: ['guardian'],
         summary: 'Delete one media asset when no room message references remain',
@@ -332,7 +394,7 @@ export async function guardianRoutes(app: FastifyInstance): Promise<void> {
   app.post(
     '/storage/cleanup-orphans',
     {
-      preHandler: app.authenticate,
+      ...guardianAuth,
       schema: {
         tags: ['guardian'],
         summary: 'Delete storage files that are not tracked by media_assets'

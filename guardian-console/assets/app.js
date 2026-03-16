@@ -1,8 +1,4 @@
 const app = document.getElementById('app')
-const runtimeConfig = window.__GUARDIAN_CONFIG__ || {
-  googleClientId: '',
-  guardianMasterEmails: []
-}
 
 const COPY = {
   ko: {
@@ -216,6 +212,11 @@ const COPY = {
     login_kicker: 'Parent or Master Only',
     login_title: 'Guardian Console',
     login_body: 'Use Google sign-in. The default master account is {masterEmail}.',
+    login_fixed_body: 'Sign in with the configured Guardian Console ID and password.',
+    login_id_label: 'ID',
+    login_password_label: 'Password',
+    login_password_hint: 'Only the configured Guardian Console credentials can open this page.',
+    login_button: 'Sign In',
     google_signin_label: 'Google Sign-In',
     google_missing_config: 'Google Web Client ID is not configured on this server yet.',
     google_current_label: 'Current browser Google account',
@@ -227,6 +228,8 @@ const COPY = {
     signing_in: 'Signing in...',
     footer_note:
       'This page uses /v1/auth/google and /v1/guardian/*. Access is restricted to parent and configured master accounts.',
+    footer_note_credentials:
+      'This page now uses /v1/guardian/auth/login and only the configured fixed credentials are accepted.',
     dashboard_loading_title: 'Overview',
     dashboard_loading_body: 'Loading summary data from the server.',
     dashboard_loading_state: 'Reading DB summary, family links, and storage warnings.',
@@ -438,6 +441,10 @@ const state = {
   session: loadSession(),
   locale: loadLocale(),
   user: null,
+  loginForm: {
+    loginId: '',
+    password: ''
+  },
   activeTab: 'dashboard',
   flash: null,
   loading: {
@@ -461,7 +468,6 @@ const state = {
   storageAssets: [],
   editDraft: null,
   bulkDeletePreview: null,
-  googleButtonReady: false,
   filters: {
     users: {
       q: '',
@@ -489,101 +495,6 @@ const state = {
       limit: 80
     }
   }
-}
-
-function getMasterEmailLabel() {
-  return runtimeConfig.guardianMasterEmails?.[0] || 'dj14.park@gmail.com'
-}
-
-function hasGoogleClientConfig() {
-  return !!runtimeConfig.googleClientId
-}
-
-function hasGoogleIdentityApi() {
-  return !!window.google?.accounts?.id
-}
-
-function randomToken(length = 24) {
-  const bytes = new Uint8Array(length)
-  window.crypto.getRandomValues(bytes)
-  return Array.from(bytes, (value) => value.toString(16).padStart(2, '0')).join('')
-}
-
-function decodeJwtPayload(token) {
-  const [, payload] = token.split('.')
-  if (!payload) return null
-
-  const normalized = payload.replace(/-/g, '+').replace(/_/g, '/')
-  const padded = normalized.padEnd(Math.ceil(normalized.length / 4) * 4, '=')
-
-  try {
-    return JSON.parse(window.atob(padded))
-  } catch {
-    return null
-  }
-}
-
-function getGuardianRedirectUri() {
-  return `${window.location.origin}/guardian`
-}
-
-function startGoogleAlternateAccountFlow() {
-  if (!hasGoogleClientConfig()) {
-    setFlash('error', t('google_missing_config'))
-    return
-  }
-
-  const stateValue = randomToken(16)
-  const nonce = randomToken(16)
-
-  sessionStorage.setItem('guardian-google-state', stateValue)
-  sessionStorage.setItem('guardian-google-nonce', nonce)
-
-  const url = new URL('https://accounts.google.com/o/oauth2/v2/auth')
-  url.searchParams.set('client_id', runtimeConfig.googleClientId)
-  url.searchParams.set('redirect_uri', getGuardianRedirectUri())
-  url.searchParams.set('response_type', 'id_token')
-  url.searchParams.set('scope', 'openid email profile')
-  url.searchParams.set('prompt', 'select_account')
-  url.searchParams.set('nonce', nonce)
-  url.searchParams.set('state', stateValue)
-
-  window.location.assign(url.toString())
-}
-
-async function handleGoogleRedirectResult() {
-  const hash = window.location.hash.replace(/^#/, '')
-  if (!hash.includes('id_token=')) {
-    return false
-  }
-
-  const params = new URLSearchParams(hash)
-  const idToken = params.get('id_token') || ''
-  const returnedState = params.get('state') || ''
-  const storedState = sessionStorage.getItem('guardian-google-state') || ''
-  const storedNonce = sessionStorage.getItem('guardian-google-nonce') || ''
-
-  history.replaceState(null, '', getGuardianRedirectUri())
-  sessionStorage.removeItem('guardian-google-state')
-  sessionStorage.removeItem('guardian-google-nonce')
-
-  if (!idToken) {
-    throw new Error(t('google_missing_id_token'))
-  }
-
-  if (!returnedState || !storedState || returnedState !== storedState) {
-    throw new Error(t('google_redirect_state_invalid'))
-  }
-
-  if (storedNonce) {
-    const payload = decodeJwtPayload(idToken)
-    if (!payload?.nonce || payload.nonce !== storedNonce) {
-      throw new Error(t('google_redirect_nonce_invalid'))
-    }
-  }
-
-  await loginWithGoogle(idToken)
-  return true
 }
 
 function loadSession() {
@@ -714,7 +625,7 @@ function buildQuery(params) {
   return query ? `?${query}` : ''
 }
 
-async function apiRequest(path, options = {}, retry = true) {
+async function apiRequest(path, options = {}) {
   const headers = new Headers(options.headers || {})
   const isBodyObject =
     options.body &&
@@ -736,19 +647,18 @@ async function apiRequest(path, options = {}, retry = true) {
     body: isBodyObject ? JSON.stringify(options.body) : options.body
   })
 
-  if (response.status === 401 && retry && state.session?.refreshToken) {
-    const refreshed = await refreshSession().catch(() => false)
-    if (refreshed) {
-      return apiRequest(path, options, false)
-    }
-  }
-
   let payload = null
   if (response.status !== 204) {
     payload = await response.json().catch(() => null)
   }
 
   if (!response.ok || (payload && payload.success === false)) {
+    if (response.status === 401 && state.session?.accessToken) {
+      clearSession()
+      render()
+      throw new Error(t('session_validation_failed'))
+    }
+
     const message = payload?.error?.message || `Request failed (${response.status})`
     throw new Error(message)
   }
@@ -756,47 +666,18 @@ async function apiRequest(path, options = {}, retry = true) {
   return payload?.data ?? payload
 }
 
-async function refreshSession() {
-  if (!state.session?.refreshToken) return false
-
-  const response = await fetch('/v1/auth/refresh', {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json'
-    },
-    body: JSON.stringify({
-      refreshToken: state.session.refreshToken
-    })
-  })
-
-  const payload = await response.json().catch(() => null)
-  if (!response.ok || !payload?.success) {
-    clearSession()
-    throw new Error(payload?.error?.message || 'Could not refresh session.')
-  }
-
-  saveSession({
-    ...state.session,
-    accessToken: payload.data.tokens.accessToken,
-    refreshToken: payload.data.tokens.refreshToken
-  })
-
-  return true
-}
-
-async function loginWithGoogle(idToken) {
+async function loginWithPassword(loginId, password) {
   state.loading.auth = true
   render()
 
   try {
-    const data = await apiRequest('/v1/auth/google', {
+    const data = await apiRequest('/v1/guardian/auth/login', {
       method: 'POST',
-      body: { idToken }
+      body: { loginId, password }
     })
 
     saveSession({
-      accessToken: data.tokens.accessToken,
-      refreshToken: data.tokens.refreshToken
+      accessToken: data.accessToken
     })
     state.user = data.user
     clearFlash()
@@ -808,7 +689,7 @@ async function loginWithGoogle(idToken) {
 }
 
 async function fetchMe() {
-  return apiRequest('/v1/auth/me')
+  return apiRequest('/v1/guardian/auth/me')
 }
 
 async function loadDashboard() {
@@ -935,7 +816,7 @@ function renderTopbar() {
         <div>
           <div class="session-label">${escapeHtml(t('signed_in'))}</div>
           <div class="session-name">${escapeHtml(name)}</div>
-          <div class="session-meta">${escapeHtml(state.user?.email || '')}<br />${escapeHtml(t('role_label'))}: ${escapeHtml(state.user?.role ? roleText(state.user.role) : '-')}</div>
+          <div class="session-meta">ID: ${escapeHtml(state.user?.email || '')}<br />${escapeHtml(t('role_label'))}: ${escapeHtml(state.user?.role ? roleText(state.user.role) : '-')}</div>
         </div>
         <div class="top-actions">
           <button class="button ${state.locale === 'ko' ? 'secondary' : 'ghost'}" data-set-locale="ko">KO</button>
@@ -979,52 +860,6 @@ function renderKpi(label, value, sub) {
   `
 }
 
-function scheduleGoogleButtonRender() {
-  if (state.session || !hasGoogleClientConfig()) {
-    state.googleButtonReady = false
-    return
-  }
-
-  const renderGoogleButton = () => {
-    const container = document.getElementById('google-signin-area')
-    if (!container || state.session) return
-
-    if (!hasGoogleIdentityApi()) {
-      window.setTimeout(renderGoogleButton, 250)
-      return
-    }
-
-    container.innerHTML = ''
-    window.google.accounts.id.initialize({
-      client_id: runtimeConfig.googleClientId,
-      callback: async (response) => {
-        if (!response?.credential) {
-          setFlash('error', t('google_missing_id_token'))
-          return
-        }
-
-        try {
-          await loginWithGoogle(response.credential)
-        } catch (error) {
-          setFlash('error', error.message || t('google_signin_failed'))
-        }
-      }
-    })
-
-    window.google.accounts.id.renderButton(container, {
-      theme: 'outline',
-      size: 'large',
-      shape: 'pill',
-      text: 'continue_with',
-      width: 320
-    })
-
-    state.googleButtonReady = true
-  }
-
-  window.setTimeout(renderGoogleButton, 0)
-}
-
 function renderLogin() {
   return `
     <div class="login-wrap">
@@ -1035,27 +870,39 @@ function renderLogin() {
           <button class="button ${state.locale === 'en' ? 'secondary' : 'ghost'}" type="button" data-set-locale="en">EN</button>
         </div>
         <h1>${escapeHtml(t('login_title'))}</h1>
-        <p>${escapeHtml(t('login_body', { masterEmail: getMasterEmailLabel() }))}</p>
+        <p>${escapeHtml(t('login_fixed_body'))}</p>
         ${renderFlash()}
-        <div class="section-stack">
+        <form id="guardian-login-form" class="section-stack">
           <div class="field">
-            <label>${escapeHtml(t('google_current_label'))}</label>
-            <div class="muted">${escapeHtml(t('google_current_body'))}</div>
-            ${
-              hasGoogleClientConfig()
-                ? `<div id="google-signin-area"></div>`
-                : `<div class="empty-state">${escapeHtml(t('google_missing_config'))}</div>`
-            }
+            <label for="guardian-login-id">${escapeHtml(t('login_id_label'))}</label>
+            <input
+              id="guardian-login-id"
+              class="input"
+              name="loginId"
+              type="text"
+              autocomplete="username"
+              value="${escapeHtml(state.loginForm.loginId)}"
+              required
+            />
           </div>
           <div class="field">
-            <label>${escapeHtml(t('google_switch_label'))}</label>
-            <div class="muted">${escapeHtml(t('google_switch_body'))}</div>
-            <button class="button primary" type="button" data-action="google-switch-account" ${!hasGoogleClientConfig() || state.loading.auth ? 'disabled' : ''}>
-              ${escapeHtml(state.loading.auth ? t('signing_in') : t('google_switch_button'))}
-            </button>
+            <label for="guardian-login-password">${escapeHtml(t('login_password_label'))}</label>
+            <input
+              id="guardian-login-password"
+              class="input"
+              name="password"
+              type="password"
+              autocomplete="current-password"
+              value="${escapeHtml(state.loginForm.password)}"
+              required
+            />
+            <div class="muted">${escapeHtml(t('login_password_hint'))}</div>
           </div>
-        </div>
-        <div class="footer-note">${escapeHtml(t('footer_note'))}</div>
+          <button class="button primary" type="submit" ${state.loading.auth ? 'disabled' : ''}>
+            ${escapeHtml(state.loading.auth ? t('signing_in') : t('login_button'))}
+          </button>
+        </form>
+        <div class="footer-note">${escapeHtml(t('footer_note_credentials'))}</div>
       </section>
     </div>
   `
@@ -1787,10 +1634,6 @@ function render() {
   document.documentElement.lang = state.locale
   document.title = `ourHangout Guardian Console | ${t(`tab_${state.activeTab}_title`)}`
   app.innerHTML = state.session ? renderConsole() : renderLogin()
-
-  if (!state.session) {
-    scheduleGoogleButtonRender()
-  }
 }
 
 function startEditUser(userId) {
@@ -1929,9 +1772,6 @@ app.addEventListener('click', async (event) => {
       case 'refresh-storage':
         await loadStorage()
         return
-      case 'google-switch-account':
-        startGoogleAlternateAccountFlow()
-        return
       case 'cancel-edit':
         state.editDraft = null
         render()
@@ -1963,6 +1803,17 @@ app.addEventListener('submit', async (event) => {
 
   try {
     clearFlash()
+
+    if (form.id === 'guardian-login-form') {
+      const formData = new FormData(form)
+      state.loginForm = {
+        loginId: String(formData.get('loginId') || '').trim(),
+        password: String(formData.get('password') || '')
+      }
+      await loginWithPassword(state.loginForm.loginId, state.loginForm.password)
+      state.loginForm.password = ''
+      return
+    }
 
     if (form.id === 'user-filter-form') {
       const formData = new FormData(form)
@@ -2064,12 +1915,7 @@ async function bootstrap() {
   render()
 
   try {
-    if (!state.session) {
-      const handled = await handleGoogleRedirectResult()
-      if (!handled && !state.session) {
-        return
-      }
-    }
+    if (!state.session) return
 
     await loadAllData()
   } catch (error) {

@@ -6,6 +6,7 @@ import type { Pool } from 'pg';
 import { env } from '../../config/env';
 import { AppError, ErrorCodes } from '../../lib/errors';
 import { normalizePhoneE164 } from '../../lib/phone';
+import { GUARDIAN_CONSOLE_SUB } from './guardian.auth';
 import type { MessageDelivery, MessageKind, RoomType } from '../social/social.types';
 
 type UserRole = 'parent' | 'user';
@@ -1722,6 +1723,10 @@ export class GuardianService {
   }
 
   private async assertParentRole(userId: string): Promise<void> {
+    if (userId === GUARDIAN_CONSOLE_SUB) {
+      return;
+    }
+
     const result = await this.db.query<GuardianAccessRow>(
       `SELECT role,
               email

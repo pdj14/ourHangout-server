@@ -22,6 +22,9 @@ const envSchema = z.object({
   ACCESS_TOKEN_TTL: z.string().default('15m'),
   REFRESH_TOKEN_TTL_DAYS: z.coerce.number().int().positive().default(14),
   GUARDIAN_MASTER_EMAILS: z.string().default('dj14.park@gmail.com'),
+  GUARDIAN_CONSOLE_LOGIN_ID: z.string().default('wowjini0228'),
+  GUARDIAN_CONSOLE_PASSWORD: z.string().default('dj369369'),
+  GUARDIAN_CONSOLE_ACCESS_TOKEN_TTL: z.string().default('7d'),
   CORS_ORIGINS: z.string().default('http://localhost:5173'),
   RATE_LIMIT_MAX: z.coerce.number().int().positive().default(200),
   RATE_LIMIT_WINDOW: z.string().default('1 minute'),
@@ -92,6 +95,7 @@ export const env = {
     .split(',')
     .map((email) => email.trim().toLowerCase())
     .filter(Boolean),
+  GUARDIAN_CONSOLE_LOGIN_ID: rawEnv.GUARDIAN_CONSOLE_LOGIN_ID.trim(),
   GOOGLE_CLIENT_IDS: Array.from(
     new Set(
       [

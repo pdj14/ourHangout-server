@@ -18,5 +18,6 @@ Static web console for parent-role operators to inspect and manage key `ourHango
 
 ## Authentication
 
-- Uses the existing `/v1/auth/login` flow.
-- Only `role=parent` accounts can access Guardian APIs.
+- Uses `/v1/guardian/auth/login`.
+- Default fixed credentials are `wowjini0228 / dj369369` unless overridden by server env.
+- Only the configured Guardian Console credentials can access Guardian APIs.

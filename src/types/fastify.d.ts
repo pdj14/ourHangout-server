@@ -32,6 +32,7 @@ declare module 'fastify' {
     socialService: SocialService;
     guardianService: GuardianService;
     authenticate: (request: FastifyRequest, reply: FastifyReply) => Promise<void>;
+    authenticateGuardian: (request: FastifyRequest, reply: FastifyReply) => Promise<void>;
   }
 }
 

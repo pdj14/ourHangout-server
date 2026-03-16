@@ -149,6 +149,9 @@ When using local media uploads, keep `MEDIA_STORAGE_DIR=storage/media` and prese
 | `PAIRING_CODE_TTL_SECONDS` | no | Pairing code TTL |
 | `ACCESS_TOKEN_TTL` | no | Access token lifetime |
 | `REFRESH_TOKEN_TTL_DAYS` | no | Refresh token lifetime (days) |
+| `GUARDIAN_CONSOLE_LOGIN_ID` | no | Fixed Guardian Console login id |
+| `GUARDIAN_CONSOLE_PASSWORD` | no | Fixed Guardian Console password |
+| `GUARDIAN_CONSOLE_ACCESS_TOKEN_TTL` | no | Guardian Console access token lifetime |
 | `LOG_LEVEL` | no | Pino log level |
 
 `OPENCLAW_BASE_URL` note:
@@ -168,6 +171,7 @@ See `CHAT_BACKEND_REQUIRED_LIST.md` for backend checklist and contact-integratio
 - login returns access + refresh token
 - signup creates user and returns access + refresh token
 - google token login/sign-up works when `GOOGLE_CLIENT_ID` or `GOOGLE_CLIENT_IDS` is set
+- guardian console login works with the configured fixed id/password
 - hashed contact sync and user match lookup works (`/v1/contacts/*`)
 - pairing consume creates relationship row and ensures direct room exists
 - create direct room and send message
