@@ -1091,6 +1091,7 @@ export class SocialService {
                 SELECT COUNT(*)::int
                 FROM room_messages rm
                 WHERE rm.room_id = r.id
+                  AND rm.kind <> 'system'
                   AND rm.sender_id IS DISTINCT FROM $1
                   AND rm.created_at > COALESCE(rus.last_read_at, to_timestamp(0))
               ) AS unread_count,
@@ -2245,6 +2246,7 @@ export class SocialService {
                 SELECT COUNT(*)::int
                 FROM room_messages rm
                 WHERE rm.room_id = r.id
+                  AND rm.kind <> 'system'
                   AND rm.sender_id IS DISTINCT FROM $1
                   AND rm.created_at > COALESCE(rus.last_read_at, to_timestamp(0))
               ) AS unread_count,
@@ -2387,6 +2389,7 @@ export class SocialService {
       `SELECT COUNT(*)::int AS unread_count
        FROM room_messages m
        WHERE m.room_id = $2
+         AND m.kind <> 'system'
          AND m.sender_id IS DISTINCT FROM $1
          AND m.created_at > COALESCE(
            (
