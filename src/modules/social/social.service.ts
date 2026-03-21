@@ -1095,7 +1095,23 @@ export class SocialService {
                 WHERE rm.room_id = r.id
                   AND rm.kind <> 'system'
                   AND rm.sender_id IS DISTINCT FROM $1
-                  AND rm.created_at > COALESCE(rus.last_read_at, to_timestamp(0))
+                  AND (
+                    (
+                      rus.last_read_message_id IS NULL
+                      AND rm.created_at > COALESCE(rus.last_read_at, to_timestamp(0))
+                    )
+                    OR (
+                      rus.last_read_message_id IS NOT NULL
+                      AND (
+                        rm.created_at > COALESCE(lrm.created_at, rus.last_read_at, to_timestamp(0))
+                        OR (
+                          lrm.created_at IS NOT NULL
+                          AND rm.created_at = lrm.created_at
+                          AND rm.id > rus.last_read_message_id
+                        )
+                      )
+                    )
+                  )
               ) AS unread_count,
               lm.kind AS preview_kind,
               lm.text AS preview_text,
@@ -1103,6 +1119,7 @@ export class SocialService {
        FROM room_members mem
        INNER JOIN rooms r ON r.id = mem.room_id
        LEFT JOIN room_user_settings rus ON rus.room_id = r.id AND rus.user_id = $1
+       LEFT JOIN room_messages lrm ON lrm.id = rus.last_read_message_id
        LEFT JOIN LATERAL (
          SELECT kind, text, media_url
          FROM room_messages m
@@ -2250,7 +2267,23 @@ export class SocialService {
                 WHERE rm.room_id = r.id
                   AND rm.kind <> 'system'
                   AND rm.sender_id IS DISTINCT FROM $1
-                  AND rm.created_at > COALESCE(rus.last_read_at, to_timestamp(0))
+                  AND (
+                    (
+                      rus.last_read_message_id IS NULL
+                      AND rm.created_at > COALESCE(rus.last_read_at, to_timestamp(0))
+                    )
+                    OR (
+                      rus.last_read_message_id IS NOT NULL
+                      AND (
+                        rm.created_at > COALESCE(lrm.created_at, rus.last_read_at, to_timestamp(0))
+                        OR (
+                          lrm.created_at IS NOT NULL
+                          AND rm.created_at = lrm.created_at
+                          AND rm.id > rus.last_read_message_id
+                        )
+                      )
+                    )
+                  )
               ) AS unread_count,
               lm.kind AS preview_kind,
               lm.text AS preview_text,
@@ -2258,6 +2291,7 @@ export class SocialService {
        FROM room_members mem
        INNER JOIN rooms r ON r.id = mem.room_id
        LEFT JOIN room_user_settings rus ON rus.room_id = r.id AND rus.user_id = $1
+       LEFT JOIN room_messages lrm ON lrm.id = rus.last_read_message_id
        LEFT JOIN LATERAL (
          SELECT kind, text, media_url
          FROM room_messages m
@@ -2390,18 +2424,30 @@ export class SocialService {
     const result = await this.db.query<{ unread_count: number }>(
       `SELECT COUNT(*)::int AS unread_count
        FROM room_messages m
+       LEFT JOIN room_user_settings rus
+         ON rus.room_id = $2
+        AND rus.user_id = $1
+       LEFT JOIN room_messages lrm
+         ON lrm.id = rus.last_read_message_id
        WHERE m.room_id = $2
          AND m.kind <> 'system'
          AND m.sender_id IS DISTINCT FROM $1
-         AND m.created_at > COALESCE(
+         AND (
            (
-             SELECT last_read_at
-             FROM room_user_settings
-             WHERE room_id = $2
-               AND user_id = $1
-             LIMIT 1
-           ),
-           to_timestamp(0)
+             rus.last_read_message_id IS NULL
+             AND m.created_at > COALESCE(rus.last_read_at, to_timestamp(0))
+           )
+           OR (
+             rus.last_read_message_id IS NOT NULL
+             AND (
+               m.created_at > COALESCE(lrm.created_at, rus.last_read_at, to_timestamp(0))
+               OR (
+                 lrm.created_at IS NOT NULL
+                 AND m.created_at = lrm.created_at
+                 AND m.id > rus.last_read_message_id
+               )
+             )
+           )
          )`,
       [userId, roomId]
     );
