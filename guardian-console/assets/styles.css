@@ -378,6 +378,10 @@ a {
 }
 
 .button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  text-decoration: none;
   min-height: 42px;
   border-radius: 13px;
   padding: 0 16px;
@@ -514,6 +518,11 @@ a {
 .stack {
   display: grid;
   gap: 6px;
+}
+
+.release-notes {
+  white-space: pre-wrap;
+  line-height: 1.5;
 }
 
 .card-list {

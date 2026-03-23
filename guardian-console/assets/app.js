@@ -393,6 +393,64 @@ const COPY = {
   }
 }
 
+Object.assign(COPY.ko, {
+  tab_updates_title: '\uC571 \uC5C5\uB370\uC774\uD2B8',
+  tab_updates_copy: '\uCD5C\uC2E0 Android APK \uC5C5\uB85C\uB4DC\uC640 \uBC30\uD3EC \uC0C1\uD0DC\uB97C \uAD00\uB9AC\uD569\uB2C8\uB2E4.',
+  updates_title: '\uC571 \uC5C5\uB370\uC774\uD2B8 \uAD00\uB9AC',
+  updates_body: '\uAC00\uB514\uC5B8 \uCF58\uC194\uC5D0\uC11C \uCD5C\uC2E0 Android APK\uB97C \uC62C\uB9AC\uACE0 \uBC30\uD3EC \uC0C1\uD0DC\uB97C \uD655\uC778\uD569\uB2C8\uB2E4.',
+  latest_release_title: '\uD604\uC7AC \uBC30\uD3EC \uC911\uC778 \uBC84\uC804',
+  latest_release_body: '\uC571 \uC2E4\uD589 \uC2DC \uC774 \uBC84\uC804\uC744 \uAE30\uC900\uC73C\uB85C \uC5C5\uB370\uC774\uD2B8 \uD31D\uC5C5\uC774 \uB178\uCD9C\uB429\uB2C8\uB2E4.',
+  upload_release_title: '\uCD5C\uC2E0 APK \uC62C\uB9AC\uAE30',
+  upload_release_body: '\uBE4C\uB4DC\uD55C APK \uD30C\uC77C\uACFC \uBC84\uC804 \uBB38\uC790\uC5F4\uC744 \uD568\uAED8 \uC62C\uB9AC\uBA74 \uC989\uC2DC \uCD5C\uC2E0 \uBC30\uD3EC \uBC84\uC804\uC73C\uB85C \uBC18\uC601\uB429\uB2C8\uB2E4.',
+  app_version_label: '\uC571 \uBC84\uC804',
+  app_version_hint: 'app.json \uC758 expo.version \uAC12\uACFC \uAC19\uC740 \uBC84\uC804\uC744 \uC785\uB825\uD558\uC138\uC694.',
+  release_notes_label: '\uBC30\uD3EC \uBA54\uBAA8',
+  apk_file_label: 'APK \uD30C\uC77C',
+  upload_latest: '\uCD5C\uC2E0 \uBC84\uC804 \uC62C\uB9AC\uAE30',
+  uploading_release: '\uC62C\uB9AC\uB294 \uC911...',
+  no_release_uploaded: '\uC544\uC9C1 \uC62C\uB77C\uAC04 APK \uBC84\uC804\uC774 \uC5C6\uC2B5\uB2C8\uB2E4.',
+  download_latest: '\uCD5C\uC2E0 APK \uB2E4\uC6B4\uB85C\uB4DC',
+  release_history_title: '\uBC30\uD3EC \uC774\uB825',
+  release_history_body: '\uC62C\uB9B0 APK \uBC84\uC804 \uBAA9\uB85D\uACFC \uB2E4\uC6B4\uB85C\uB4DC \uB9C1\uD06C\uB97C \uD655\uC778\uD569\uB2C8\uB2E4.',
+  table_version: '\uBC84\uC804',
+  table_file: '\uD30C\uC77C',
+  table_notes: '\uBA54\uBAA8',
+  download_file: '\uB2E4\uC6B4\uB85C\uB4DC',
+  app_update_uploaded: '\uBC84\uC804 {version}\uC774 \uCD5C\uC2E0 APK\uB85C \uC5C5\uB85C\uB4DC\uB418\uC5C8\uC2B5\uB2C8\uB2E4.',
+  app_update_file_required: 'APK \uD30C\uC77C\uC744 \uC120\uD0DD\uD574 \uC8FC\uC138\uC694.',
+  latest_badge: '\uCD5C\uC2E0',
+  no_notes: '\uBA54\uBAA8 \uC5C6\uC74C'
+})
+
+Object.assign(COPY.en, {
+  tab_updates_title: 'App Updates',
+  tab_updates_copy: 'Upload the latest Android APK and manage the release feed.',
+  updates_title: 'App Update Management',
+  updates_body: 'Upload the latest Android APK from Guardian Console and review the published release feed.',
+  latest_release_title: 'Current Published Version',
+  latest_release_body: 'The app startup check uses this version to decide whether an update popup should appear.',
+  upload_release_title: 'Upload Latest APK',
+  upload_release_body: 'Upload a built APK together with the exact version string to publish it immediately as the latest release.',
+  app_version_label: 'App Version',
+  app_version_hint: 'Use the same value as expo.version in app.json.',
+  release_notes_label: 'Release Notes',
+  apk_file_label: 'APK File',
+  upload_latest: 'Upload Latest Version',
+  uploading_release: 'Uploading...',
+  no_release_uploaded: 'No APK release has been uploaded yet.',
+  download_latest: 'Download Latest APK',
+  release_history_title: 'Release History',
+  release_history_body: 'Review uploaded APK versions and download links.',
+  table_version: 'Version',
+  table_file: 'File',
+  table_notes: 'Notes',
+  download_file: 'Download',
+  app_update_uploaded: 'Version {version} is now published as the latest APK.',
+  app_update_file_required: 'Select an APK file first.',
+  latest_badge: 'Latest',
+  no_notes: 'No notes'
+})
+
 function loadLocale() {
   try {
     const raw = localStorage.getItem('guardian-console-locale')
@@ -433,6 +491,10 @@ function getTabMeta() {
     storage: {
       title: t('tab_storage_title'),
       copy: t('tab_storage_copy')
+    },
+    updates: {
+      title: t('tab_updates_title'),
+      copy: t('tab_updates_copy')
     }
   }
 }
@@ -453,6 +515,8 @@ const state = {
     rooms: false,
     roomMessages: false,
     storage: false,
+    updates: false,
+    updateUpload: false,
     auth: false
   },
   summary: null,
@@ -466,6 +530,8 @@ const state = {
   },
   storageOverview: null,
   storageAssets: [],
+  latestAppUpdate: null,
+  appUpdates: [],
   editDraft: null,
   bulkDeletePreview: null,
   filters: {
@@ -793,9 +859,23 @@ async function loadStorage() {
   }
 }
 
+async function loadAppUpdates() {
+  state.loading.updates = true
+  render()
+
+  try {
+    const data = await apiRequest('/v1/guardian/app-updates')
+    state.latestAppUpdate = data.latest || null
+    state.appUpdates = data.items || []
+  } finally {
+    state.loading.updates = false
+    render()
+  }
+}
+
 async function loadAllData() {
   state.user = await fetchMe()
-  await Promise.all([loadDashboard(), loadUsers(), loadRooms(), loadStorage()])
+  await Promise.all([loadDashboard(), loadUsers(), loadRooms(), loadStorage(), loadAppUpdates()])
 }
 
 function renderFlash() {
@@ -1601,6 +1681,149 @@ function renderStorage() {
   `
 }
 
+function renderUpdates() {
+  const latest = state.latestAppUpdate
+
+  return `
+    <section class="panel section-stack">
+      <div class="panel-header">
+        <div>
+          <h2 class="panel-title">${escapeHtml(t('updates_title'))}</h2>
+          <p class="panel-copy">${escapeHtml(t('updates_body'))}</p>
+        </div>
+        <div class="button-row">
+          <button class="button ghost" type="button" data-action="refresh-updates">${escapeHtml(t('refresh'))}</button>
+        </div>
+      </div>
+
+      <div class="split-grid">
+        <section class="mini-panel">
+          <h3>${escapeHtml(t('latest_release_title'))}</h3>
+          <p>${escapeHtml(t('latest_release_body'))}</p>
+          ${
+            latest
+              ? `
+                <article class="info-card">
+                  <div class="message-head">
+                    <strong>${escapeHtml(latest.version)}</strong>
+                    <div class="filter-row">
+                      ${latest.isLatest ? statusBadge(t('latest_badge'), 'teal') : ''}
+                      ${statusBadge(latest.fileExists ? t('file_exists') : t('file_missing'), latest.fileExists ? 'teal' : 'danger')}
+                    </div>
+                  </div>
+                  <div class="stack release-notes">
+                    <span>${escapeHtml(t('table_file'))}: ${escapeHtml(latest.fileName)}</span>
+                    <span>${escapeHtml(t('table_updated'))}: ${formatDate(latest.uploadedAt)}</span>
+                    <span>${escapeHtml(t('table_storage'))}: ${formatBytes(latest.sizeBytes)}</span>
+                    <span>${escapeHtml(latest.notes || t('no_notes'))}</span>
+                  </div>
+                  <div class="button-row" style="margin-top:12px">
+                    ${
+                      latest.fileExists
+                        ? `<a class="button secondary" href="${escapeHtml(latest.latestDownloadUrl)}" target="_blank" rel="noreferrer">${escapeHtml(t('download_latest'))}</a>`
+                        : ''
+                    }
+                  </div>
+                </article>
+              `
+              : `<div class="empty-state">${escapeHtml(t('no_release_uploaded'))}</div>`
+          }
+        </section>
+
+        <section class="mini-panel">
+          <h3>${escapeHtml(t('upload_release_title'))}</h3>
+          <p>${escapeHtml(t('upload_release_body'))}</p>
+          <form id="app-updates-upload-form" class="section-stack">
+            <div class="field">
+              <label for="app-update-version">${escapeHtml(t('app_version_label'))}</label>
+              <input id="app-update-version" class="input" name="version" type="text" placeholder="1.0.1" required />
+              <div class="muted">${escapeHtml(t('app_version_hint'))}</div>
+            </div>
+            <div class="field">
+              <label for="app-update-notes">${escapeHtml(t('release_notes_label'))}</label>
+              <textarea id="app-update-notes" class="textarea" name="notes" placeholder="What changed in this build?"></textarea>
+            </div>
+            <div class="field">
+              <label for="app-update-file">${escapeHtml(t('apk_file_label'))}</label>
+              <input
+                id="app-update-file"
+                class="input"
+                name="apkFile"
+                type="file"
+                accept=".apk,application/vnd.android.package-archive,application/octet-stream"
+                required
+              />
+            </div>
+            <div class="button-row">
+              <button class="button primary" type="submit" ${state.loading.updateUpload ? 'disabled' : ''}>
+                ${escapeHtml(state.loading.updateUpload ? t('uploading_release') : t('upload_latest'))}
+              </button>
+            </div>
+          </form>
+        </section>
+      </div>
+
+      <section class="mini-panel">
+        <h3>${escapeHtml(t('release_history_title'))}</h3>
+        <p>${escapeHtml(t('release_history_body'))}</p>
+        <div class="table-wrap">
+          <table class="data-table">
+            <thead>
+              <tr>
+                <th>${escapeHtml(t('table_version'))}</th>
+                <th>${escapeHtml(t('table_file'))}</th>
+                <th>${escapeHtml(t('table_notes'))}</th>
+                <th>${escapeHtml(t('table_updated'))}</th>
+                <th>${escapeHtml(t('table_actions'))}</th>
+              </tr>
+            </thead>
+            <tbody>
+              ${
+                state.appUpdates.length
+                  ? state.appUpdates
+                      .map(
+                        (release) => `
+                          <tr>
+                            <td>
+                              <strong>${escapeHtml(release.version)}</strong>
+                              ${release.isLatest ? statusBadge(t('latest_badge'), 'teal') : ''}
+                            </td>
+                            <td>
+                              <div class="stack">
+                                <span>${escapeHtml(release.fileName)}</span>
+                                <span>${statusBadge(release.fileExists ? t('file_exists') : t('file_missing'), release.fileExists ? 'teal' : 'danger')}</span>
+                                <span>${formatBytes(release.sizeBytes)}</span>
+                              </div>
+                            </td>
+                            <td><div class="release-notes">${escapeHtml(release.notes || t('no_notes'))}</div></td>
+                            <td>${formatDate(release.uploadedAt)}</td>
+                            <td>
+                              ${
+                                release.fileExists
+                                  ? `<a class="button ghost" href="${escapeHtml(release.downloadUrl)}" target="_blank" rel="noreferrer">${escapeHtml(t('download_file'))}</a>`
+                                  : ''
+                              }
+                            </td>
+                          </tr>
+                        `
+                      )
+                      .join('')
+                  : `
+                    <tr>
+                      <td colspan="5">
+                        <div class="empty-state">${escapeHtml(t('no_release_uploaded'))}</div>
+                      </td>
+                    </tr>
+                  `
+              }
+            </tbody>
+          </table>
+        </div>
+      </section>
+    </section>
+  `
+}
+
 function renderActiveTab() {
   switch (state.activeTab) {
     case 'users':
@@ -1609,6 +1832,8 @@ function renderActiveTab() {
       return renderRooms()
     case 'storage':
       return renderStorage()
+    case 'updates':
+      return renderUpdates()
     case 'dashboard':
     default:
       return renderDashboard()
@@ -1666,6 +1891,11 @@ async function refreshCurrentTab() {
 
   if (state.activeTab === 'rooms') {
     await loadRooms()
+    return
+  }
+
+  if (state.activeTab === 'updates') {
+    await loadAppUpdates()
     return
   }
 
@@ -1771,6 +2001,9 @@ app.addEventListener('click', async (event) => {
         return
       case 'refresh-storage':
         await loadStorage()
+        return
+      case 'refresh-updates':
+        await loadAppUpdates()
         return
       case 'cancel-edit':
         state.editDraft = null
@@ -1905,6 +2138,40 @@ app.addEventListener('submit', async (event) => {
         limit: Number(formData.get('limit') || 80)
       }
       await loadStorage()
+      return
+    }
+
+    if (form.id === 'app-updates-upload-form') {
+      const formData = new FormData(form)
+      const version = String(formData.get('version') || '').trim()
+      const notes = String(formData.get('notes') || '').trim()
+      const file = formData.get('apkFile')
+
+      if (!(file instanceof File) || file.size <= 0) {
+        throw new Error(t('app_update_file_required'))
+      }
+
+      state.loading.updateUpload = true
+      render()
+
+      try {
+        const result = await apiRequest('/v1/guardian/app-updates', {
+          method: 'PUT',
+          headers: {
+            'Content-Type': file.type || 'application/vnd.android.package-archive',
+            'X-App-Version': version,
+            'X-App-Notes': notes,
+            'X-App-File-Name': file.name
+          },
+          body: file
+        })
+
+        setFlash('info', t('app_update_uploaded', { version: result.version || version }))
+        await loadAppUpdates()
+      } finally {
+        state.loading.updateUpload = false
+        render()
+      }
     }
   } catch (error) {
     setFlash('error', error.message || t('action_failed'))

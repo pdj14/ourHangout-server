@@ -17,6 +17,7 @@ export const swaggerPlugin = fp(async (app) => {
         { name: 'bots', description: 'In-app bot discovery and bot room bootstrap' },
         { name: 'chat', description: '1:1 rooms, messages, and ACK handling' },
         { name: 'social', description: 'Profiles, friends, rooms, media, reports, and push token APIs' },
+        { name: 'app-updates', description: 'Published Android APK version checks and download endpoints' },
         { name: 'openclaw', description: 'OpenClaw provider diagnostics and test routes' },
         { name: 'ops', description: 'Health, readiness, and metrics endpoints' }
       ]
