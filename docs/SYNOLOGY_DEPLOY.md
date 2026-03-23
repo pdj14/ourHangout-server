@@ -25,7 +25,6 @@ DSM 버전별 앱:
 1. `docker-compose.yml`
 2. `Dockerfile`
 3. `src/`, `db/`, `package.json` 등 전체 프로젝트
-4. `logs/`, `storage/media/` 폴더 생성 권장
 
 ## 2) 환경 변수 파일(.env) 준비
 
@@ -41,7 +40,6 @@ POSTGRES_PASSWORD=<강한 비밀번호>
 CORS_ORIGINS=http://<APP_HOST_OR_DOMAIN>
 OPENCLAW_MODE=mock
 OPENCLAW_BASE_URL=http://127.0.0.1:18888
-MEDIA_STORAGE_DIR=storage/media
 ```
 
 주의:
