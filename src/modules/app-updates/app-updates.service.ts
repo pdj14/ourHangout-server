@@ -52,6 +52,13 @@ type AppUpdateDownloadAsset = {
   sizeBytes: number;
 };
 
+type DeleteAppReleaseResult = {
+  version: string;
+  fileName: string;
+  fileDeleted: boolean;
+  latestVersion: string | null;
+};
+
 function trimTrailingSlash(value: string): string {
   return value.trim().replace(/\/+$/, '');
 }
@@ -168,6 +175,26 @@ export class AppUpdatesService {
     await fs.writeFile(this.manifestPath, `${JSON.stringify(manifest, null, 2)}\n`, 'utf8');
   }
 
+  private async cleanupOrphanedReleaseFiles(history: StoredAppRelease[]): Promise<void> {
+    await this.ensureStorageRoot();
+    const keepFileNames = new Set(history.map((record) => record.fileName));
+    const entries = await fs.readdir(this.storageRoot, { withFileTypes: true });
+
+    await Promise.all(
+      entries.map(async (entry) => {
+        if (!entry.isFile()) return;
+        if (entry.name === 'manifest.json') return;
+        if (keepFileNames.has(entry.name)) return;
+
+        try {
+          await fs.unlink(resolve(this.storageRoot, entry.name));
+        } catch (error) {
+          this.logger.warn({ error, fileName: entry.name }, 'Failed to delete orphaned app update file.');
+        }
+      })
+    );
+  }
+
   private async buildRelease(record: StoredAppRelease, isLatest: boolean): Promise<AppUpdateRelease> {
     let fileExists = false;
     try {
@@ -250,8 +277,46 @@ export class AppUpdatesService {
     ].slice(0, MAX_RELEASE_HISTORY);
 
     await this.writeManifest({ history: nextHistory });
+    await this.cleanupOrphanedReleaseFiles(nextHistory);
 
     return this.buildRelease(nextRelease, true);
+  }
+
+  async deleteRelease(version: string): Promise<DeleteAppReleaseResult> {
+    const normalizedVersion = (version || '').trim();
+    if (!normalizedVersion) {
+      throw new AppError(400, ErrorCodes.VALIDATION_ERROR, 'Version is required.');
+    }
+
+    const manifest = await this.readManifest();
+    const target = manifest.history.find((record) => record.version === normalizedVersion);
+    if (!target) {
+      throw new AppError(404, ErrorCodes.RESOURCE_NOT_FOUND, 'App release version not found.');
+    }
+
+    const nextHistory = manifest.history.filter((record) => record.version !== normalizedVersion);
+    await this.writeManifest({ history: nextHistory });
+    await this.cleanupOrphanedReleaseFiles(nextHistory);
+
+    const fileStillReferenced = nextHistory.some((record) => record.fileName === target.fileName);
+    let fileDeleted = false;
+    if (!fileStillReferenced) {
+      try {
+        await fs.unlink(this.getReleasePath(target.fileName));
+        fileDeleted = true;
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== 'ENOENT') {
+          throw error;
+        }
+      }
+    }
+
+    return {
+      version: target.version,
+      fileName: target.fileName,
+      fileDeleted,
+      latestVersion: nextHistory[0]?.version ?? null
+    };
   }
 
   async getLatestDownloadAsset(): Promise<AppUpdateDownloadAsset> {

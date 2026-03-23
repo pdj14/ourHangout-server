@@ -13,6 +13,7 @@ import type { MessageKind, RoomDto, RoomMessageDto, RoomType, UserProfileDto } f
 type CursorInput = {
   at: Date;
   id: string;
+  order?: number;
 };
 
 type UserProfileRow = {
@@ -99,6 +100,7 @@ type RoomMessageRow = {
   media_url: string | null;
   delivery: 'sent' | 'delivered' | 'read';
   created_at: Date;
+  order_seq: number;
   sender_name: string | null;
   sender_email: string | null;
   unread_count?: number;
@@ -201,7 +203,10 @@ function makeSystemMessageToken(type: 'member_left', displayName: string): strin
 }
 
 function encodeCursor(input: CursorInput): string {
-  return Buffer.from(JSON.stringify({ at: input.at.toISOString(), id: input.id }), 'utf8').toString('base64url');
+  return Buffer.from(
+    JSON.stringify({ at: input.at.toISOString(), id: input.id, order: input.order ?? null }),
+    'utf8'
+  ).toString('base64url');
 }
 
 function decodeCursor(raw?: string): CursorInput | null {
@@ -210,7 +215,11 @@ function decodeCursor(raw?: string): CursorInput | null {
   }
 
   try {
-    const parsed = JSON.parse(Buffer.from(raw, 'base64url').toString('utf8')) as { at?: string; id?: string };
+    const parsed = JSON.parse(Buffer.from(raw, 'base64url').toString('utf8')) as {
+      at?: string;
+      id?: string;
+      order?: number;
+    };
     if (!parsed.at || !parsed.id) {
       return null;
     }
@@ -222,7 +231,8 @@ function decodeCursor(raw?: string): CursorInput | null {
 
     return {
       at,
-      id: parsed.id
+      id: parsed.id,
+      order: Number.isFinite(parsed.order) ? Number(parsed.order) : undefined
     };
   } catch {
     return null;
@@ -1107,7 +1117,7 @@ export class SocialService {
                         OR (
                           lrm.created_at IS NOT NULL
                           AND rm.created_at = lrm.created_at
-                          AND rm.id > rus.last_read_message_id
+                          AND rm.order_seq > lrm.order_seq
                         )
                       )
                     )
@@ -1124,7 +1134,7 @@ export class SocialService {
          SELECT kind, text, media_url
          FROM room_messages m
          WHERE m.room_id = r.id
-         ORDER BY m.created_at DESC, m.id DESC
+          ORDER BY m.created_at DESC, m.order_seq DESC
          LIMIT 1
        ) lm ON TRUE
        WHERE mem.user_id = $1
@@ -1486,6 +1496,7 @@ export class SocialService {
               m.media_url,
               m.delivery,
               m.created_at,
+              m.order_seq,
               u.display_name AS sender_name,
               u.email AS sender_email,
               receipts.unread_count,
@@ -1496,8 +1507,16 @@ export class SocialService {
          SELECT COUNT(*) FILTER (
                   WHERE m.sender_id IS NOT NULL
                     AND NOT (
-                      rus.last_read_message_id = m.id OR
-                      (rus.last_read_at IS NOT NULL AND rus.last_read_at >= m.created_at)
+                       (
+                         rus.last_read_message_id IS NOT NULL
+                         AND lrm.order_seq IS NOT NULL
+                         AND m.order_seq <= lrm.order_seq
+                       )
+                       OR (
+                         rus.last_read_message_id IS NULL
+                         AND rus.last_read_at IS NOT NULL
+                         AND rus.last_read_at >= m.created_at
+                       )
                     )
                 )::int AS unread_count,
                 COALESCE(
@@ -1505,30 +1524,46 @@ export class SocialService {
                     FILTER (
                       WHERE m.sender_id IS NOT NULL
                         AND (
-                          rus.last_read_message_id = m.id OR
-                          (rus.last_read_at IS NOT NULL AND rus.last_read_at >= m.created_at)
+                           (
+                             rus.last_read_message_id IS NOT NULL
+                             AND lrm.order_seq IS NOT NULL
+                             AND m.order_seq <= lrm.order_seq
+                           )
+                           OR (
+                             rus.last_read_message_id IS NULL
+                             AND rus.last_read_at IS NOT NULL
+                             AND rus.last_read_at >= m.created_at
+                           )
                         )
                     ),
                   ARRAY[]::text[]
                 ) AS read_by_names
          FROM room_members rm
          INNER JOIN users ru ON ru.id = rm.user_id
-         LEFT JOIN room_user_settings rus
-           ON rus.room_id = m.room_id
-          AND rus.user_id = rm.user_id
-         WHERE rm.room_id = m.room_id
-           AND rm.left_at IS NULL
-           AND (m.sender_id IS NULL OR rm.user_id IS DISTINCT FROM m.sender_id)
+          LEFT JOIN room_user_settings rus
+            ON rus.room_id = m.room_id
+           AND rus.user_id = rm.user_id
+          LEFT JOIN room_messages lrm
+            ON lrm.id = rus.last_read_message_id
+          WHERE rm.room_id = m.room_id
+            AND rm.left_at IS NULL
+            AND (m.sender_id IS NULL OR rm.user_id IS DISTINCT FROM m.sender_id)
        ) receipts ON TRUE
        WHERE m.room_id = $1
          AND (
            $2::timestamptz IS NULL OR
            m.created_at < $2 OR
-           (m.created_at = $2 AND m.id < $3::uuid)
-         )
-       ORDER BY m.created_at DESC, m.id DESC
-       LIMIT $4`,
-      [params.roomId, cursor?.at ?? null, cursor?.id ?? null, limit + 1]
+            (
+              m.created_at = $2
+              AND (
+                ($3::bigint IS NOT NULL AND m.order_seq < $3::bigint)
+                OR ($3::bigint IS NULL AND m.id < $4::uuid)
+              )
+            )
+          )
+        ORDER BY m.created_at DESC, m.order_seq DESC
+        LIMIT $5`,
+      [params.roomId, cursor?.at ?? null, cursor?.order ?? null, cursor?.id ?? null, limit + 1]
     );
 
     const hasMore = result.rows.length > limit;
@@ -1540,7 +1575,7 @@ export class SocialService {
 
     return {
       items,
-      ...(hasMore && last ? { nextCursor: encodeCursor({ at: last.created_at, id: last.id }) } : {})
+      ...(hasMore && last ? { nextCursor: encodeCursor({ at: last.created_at, id: last.id, order: last.order_seq }) } : {})
     };
   }
 
@@ -1758,10 +1793,10 @@ export class SocialService {
         `SELECT id, created_at
          FROM room_messages
          WHERE room_id = $1
-         ORDER BY created_at DESC, id DESC
+         ORDER BY created_at DESC, order_seq DESC
          LIMIT 1`,
-        [params.roomId]
-      );
+         [params.roomId]
+       );
 
       if (latest.rows[0]) {
         readAt = latest.rows[0].created_at;
@@ -2205,6 +2240,7 @@ export class SocialService {
               m.media_url,
               m.delivery,
               m.created_at,
+              m.order_seq,
               u.display_name AS sender_name,
               u.email AS sender_email,
               receipts.unread_count,
@@ -2215,8 +2251,16 @@ export class SocialService {
          SELECT COUNT(*) FILTER (
                   WHERE m.sender_id IS NOT NULL
                     AND NOT (
-                      rus.last_read_message_id = m.id OR
-                      (rus.last_read_at IS NOT NULL AND rus.last_read_at >= m.created_at)
+                       (
+                         rus.last_read_message_id IS NOT NULL
+                         AND lrm.order_seq IS NOT NULL
+                         AND m.order_seq <= lrm.order_seq
+                       )
+                       OR (
+                         rus.last_read_message_id IS NULL
+                         AND rus.last_read_at IS NOT NULL
+                         AND rus.last_read_at >= m.created_at
+                       )
                     )
                 )::int AS unread_count,
                 COALESCE(
@@ -2224,20 +2268,30 @@ export class SocialService {
                     FILTER (
                       WHERE m.sender_id IS NOT NULL
                         AND (
-                          rus.last_read_message_id = m.id OR
-                          (rus.last_read_at IS NOT NULL AND rus.last_read_at >= m.created_at)
+                           (
+                             rus.last_read_message_id IS NOT NULL
+                             AND lrm.order_seq IS NOT NULL
+                             AND m.order_seq <= lrm.order_seq
+                           )
+                           OR (
+                             rus.last_read_message_id IS NULL
+                             AND rus.last_read_at IS NOT NULL
+                             AND rus.last_read_at >= m.created_at
+                           )
                         )
                     ),
                   ARRAY[]::text[]
                 ) AS read_by_names
          FROM room_members rm
          INNER JOIN users ru ON ru.id = rm.user_id
-         LEFT JOIN room_user_settings rus
-           ON rus.room_id = m.room_id
-          AND rus.user_id = rm.user_id
-         WHERE rm.room_id = m.room_id
-           AND rm.left_at IS NULL
-           AND (m.sender_id IS NULL OR rm.user_id IS DISTINCT FROM m.sender_id)
+          LEFT JOIN room_user_settings rus
+            ON rus.room_id = m.room_id
+           AND rus.user_id = rm.user_id
+          LEFT JOIN room_messages lrm
+            ON lrm.id = rus.last_read_message_id
+          WHERE rm.room_id = m.room_id
+            AND rm.left_at IS NULL
+            AND (m.sender_id IS NULL OR rm.user_id IS DISTINCT FROM m.sender_id)
        ) receipts ON TRUE
        WHERE m.id = $1
        LIMIT 1`,
@@ -2279,7 +2333,7 @@ export class SocialService {
                         OR (
                           lrm.created_at IS NOT NULL
                           AND rm.created_at = lrm.created_at
-                          AND rm.id > rus.last_read_message_id
+                          AND rm.order_seq > lrm.order_seq
                         )
                       )
                     )
@@ -2296,9 +2350,9 @@ export class SocialService {
          SELECT kind, text, media_url
          FROM room_messages m
          WHERE m.room_id = r.id
-         ORDER BY m.created_at DESC, m.id DESC
-         LIMIT 1
-       ) lm ON TRUE
+          ORDER BY m.created_at DESC, m.order_seq DESC
+          LIMIT 1
+        ) lm ON TRUE
        WHERE mem.user_id = $1
          AND mem.left_at IS NULL
          AND r.deleted_at IS NULL
@@ -2444,10 +2498,10 @@ export class SocialService {
                OR (
                  lrm.created_at IS NOT NULL
                  AND m.created_at = lrm.created_at
-                 AND m.id > rus.last_read_message_id
-               )
-             )
-           )
+                  AND m.order_seq > lrm.order_seq
+                )
+              )
+            )
          )`,
       [userId, roomId]
     );
