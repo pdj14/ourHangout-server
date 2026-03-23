@@ -27,6 +27,8 @@ import { contactsRoutes } from './modules/contacts/contacts.routes';
 import { GuardianService } from './modules/guardian/guardian.service';
 import { guardianRoutes } from './modules/guardian/guardian.routes';
 import { guardianConsoleRoutes } from './modules/guardian/guardian.console.routes';
+import { appUpdatesRoutes } from './modules/app-updates/app-updates.routes';
+import { guardianAppUpdatesRoutes } from './modules/app-updates/app-updates.guardian.routes';
 import { FcmPushService } from './lib/push/fcm-push.service';
 import { registerErrorHandlers } from './plugins/error-handler';
 import { securityPlugin } from './plugins/security';
@@ -50,6 +52,14 @@ export async function buildServer(): Promise<FastifyInstance> {
   app.addContentTypeParser(/^video\/.*/, { parseAs: 'buffer', bodyLimit: MAX_UPLOAD_BODY_BYTES }, (_request, body, done) => {
     done(null, body);
   });
+
+  app.addContentTypeParser(
+    /^application\/(octet-stream|vnd\.android\.package-archive)$/i,
+    { parseAs: 'buffer', bodyLimit: MAX_UPLOAD_BODY_BYTES },
+    (_request, body, done) => {
+      done(null, body);
+    }
+  );
 
   await app.register(websocket);
   await app.register(swaggerPlugin);
@@ -130,11 +140,13 @@ export async function buildServer(): Promise<FastifyInstance> {
 
   await app.register(healthRoutes);
   await app.register(authRoutes, { prefix: '/v1/auth' });
+  await app.register(appUpdatesRoutes, { prefix: '/v1/app-updates' });
   await app.register(pairingRoutes, { prefix: '/v1/pairing' });
   await app.register(contactsRoutes, { prefix: '/v1/contacts' });
   await app.register(chatRoutes, { prefix: '/v1/chats' });
   await app.register(socialRoutes, { prefix: '/v1' });
   await app.register(guardianRoutes, { prefix: '/v1/guardian' });
+  await app.register(guardianAppUpdatesRoutes, { prefix: '/v1/guardian/app-updates' });
   await app.register(botRoutes, { prefix: '/v1/bots' });
   await app.register(websocketRoutes, { prefix: '/v1' });
   await app.register(openClawRoutes, { prefix: '/v1/openclaw' });

@@ -12,6 +12,7 @@ const envSchema = z.object({
   JWT_SECRET: z.string().min(32),
   PUBLIC_BASE_URL: z.string().default(''),
   MEDIA_STORAGE_DIR: z.string().default('storage/media'),
+  APP_UPDATE_STORAGE_DIR: z.string().default('storage/app-updates'),
   GOOGLE_CLIENT_ID: z.string().default(''),
   GOOGLE_CLIENT_IDS: z.string().default(''),
   FCM_PROJECT_ID: z.string().default(''),
