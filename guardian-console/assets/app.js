@@ -183,6 +183,8 @@ const COPY = {
     confirm_clear_avatar: '이 자산은 아바타로 연결되어 있습니다. 아바타를 비우고 계속할까요?',
     confirm_delete_asset: '이 자산을 삭제할까요?',
     flash_asset_deleted: '자산을 삭제했습니다.',
+    confirm_delete_release: '이 APK 버전을 배포 목록과 서버 디스크에서 삭제할까요?',
+    flash_release_deleted: '버전 {version}을 삭제했습니다.',
     confirm_delete_orphans: 'media_assets 에 없는 디스크 파일을 삭제할까요?',
     flash_orphans_deleted: '{count}개 파일을 삭제했고 {bytes} 를 확보했습니다.',
     action_failed: '작업에 실패했습니다.',
@@ -382,6 +384,8 @@ const COPY = {
     confirm_clear_avatar: 'This asset is linked as an avatar. Clear the avatar and continue?',
     confirm_delete_asset: 'Delete this asset?',
     flash_asset_deleted: 'Asset deleted.',
+    confirm_delete_release: 'Delete this APK release from the feed and server disk?',
+    flash_release_deleted: 'Version {version} was deleted.',
     confirm_delete_orphans: 'Delete files on disk that are not tracked in media_assets?',
     flash_orphans_deleted: '{count} files deleted, {bytes} reclaimed.',
     action_failed: 'Action failed.',
@@ -1803,6 +1807,7 @@ function renderUpdates() {
                                   ? `<a class="button ghost" href="${escapeHtml(release.downloadUrl)}" target="_blank" rel="noreferrer">${escapeHtml(t('download_file'))}</a>`
                                   : ''
                               }
+                              <button class="button danger" type="button" data-delete-release="${escapeHtml(release.version)}">${escapeHtml(t('delete'))}</button>
                             </td>
                           </tr>
                         `
@@ -1904,7 +1909,7 @@ async function refreshCurrentTab() {
 
 app.addEventListener('click', async (event) => {
   const target = event.target.closest(
-    '[data-tab],[data-action],[data-set-locale],[data-edit-user],[data-revoke-user],[data-select-room],[data-delete-message],[data-delete-asset]'
+    '[data-tab],[data-action],[data-set-locale],[data-edit-user],[data-revoke-user],[data-select-room],[data-delete-message],[data-delete-asset],[data-delete-release]'
   )
   if (!target) return
 
@@ -1978,6 +1983,16 @@ app.addEventListener('click', async (event) => {
       )
       setFlash('info', t('flash_asset_deleted'))
       await Promise.all([loadStorage(), loadDashboard(), loadUsers()])
+      return
+    }
+
+    if (target.dataset.deleteRelease) {
+      if (!window.confirm(t('confirm_delete_release'))) return
+      const result = await apiRequest(`/v1/guardian/app-updates/${encodeURIComponent(target.dataset.deleteRelease)}`, {
+        method: 'DELETE'
+      })
+      setFlash('info', t('flash_release_deleted', { version: result.version || target.dataset.deleteRelease }))
+      await loadAppUpdates()
       return
     }
 

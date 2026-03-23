@@ -62,4 +62,27 @@ export async function guardianAppUpdatesRoutes(app: FastifyInstance): Promise<vo
       return { success: true, data };
     }
   );
+
+  app.delete(
+    '/:version',
+    {
+      ...guardianAuth,
+      schema: {
+        tags: ['guardian'],
+        summary: 'Delete a published Android APK release for Guardian Console',
+        params: {
+          type: 'object',
+          required: ['version'],
+          properties: {
+            version: { type: 'string', minLength: 1, maxLength: 64 }
+          }
+        }
+      }
+    },
+    async (request) => {
+      const params = request.params as { version: string };
+      const data = await service.deleteRelease(params.version);
+      return { success: true, data };
+    }
+  );
 }
