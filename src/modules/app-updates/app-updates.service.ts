@@ -6,7 +6,7 @@ import { AppError, ErrorCodes } from '../../lib/errors';
 
 const DEFAULT_APP_UPDATE_STORAGE_DIR = 'storage/app-updates';
 const DEFAULT_APK_MIME_TYPE = 'application/vnd.android.package-archive';
-const MAX_RELEASE_HISTORY = 20;
+const MAX_RELEASE_HISTORY = 2;
 
 type StoredAppRelease = {
   version: string;
@@ -175,6 +175,19 @@ export class AppUpdatesService {
     await fs.writeFile(this.manifestPath, `${JSON.stringify(manifest, null, 2)}\n`, 'utf8');
   }
 
+  private async loadManifest(): Promise<AppUpdateManifest> {
+    const manifest = await this.readManifest();
+    const nextHistory = manifest.history.slice(0, MAX_RELEASE_HISTORY);
+    if (nextHistory.length === manifest.history.length) {
+      return manifest;
+    }
+
+    const nextManifest = { history: nextHistory };
+    await this.writeManifest(nextManifest);
+    await this.cleanupOrphanedReleaseFiles(nextHistory);
+    return nextManifest;
+  }
+
   private async cleanupOrphanedReleaseFiles(history: StoredAppRelease[]): Promise<void> {
     await this.ensureStorageRoot();
     const keepFileNames = new Set(history.map((record) => record.fileName));
@@ -214,7 +227,7 @@ export class AppUpdatesService {
   }
 
   async listReleases(): Promise<{ latest: AppUpdateRelease | null; items: AppUpdateRelease[] }> {
-    const manifest = await this.readManifest();
+    const manifest = await this.loadManifest();
     const items = await Promise.all(
       manifest.history.map((record, index) => this.buildRelease(record, index === 0))
     );
@@ -270,7 +283,7 @@ export class AppUpdatesService {
     await this.ensureStorageRoot();
     await fs.writeFile(this.getReleasePath(fileName), params.bytes);
 
-    const manifest = await this.readManifest();
+    const manifest = await this.loadManifest();
     const nextHistory = [
       nextRelease,
       ...manifest.history.filter((record) => record.version !== version)
@@ -288,7 +301,7 @@ export class AppUpdatesService {
       throw new AppError(400, ErrorCodes.VALIDATION_ERROR, 'Version is required.');
     }
 
-    const manifest = await this.readManifest();
+    const manifest = await this.loadManifest();
     const target = manifest.history.find((record) => record.version === normalizedVersion);
     if (!target) {
       throw new AppError(404, ErrorCodes.RESOURCE_NOT_FOUND, 'App release version not found.');
