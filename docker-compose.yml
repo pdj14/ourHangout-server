@@ -26,8 +26,6 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
-      migrate:
-        condition: service_completed_successfully
     restart: unless-stopped
     command: sh -c "node dist/server.js"
     volumes:
