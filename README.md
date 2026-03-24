@@ -97,6 +97,8 @@ docker compose run --rm migrate
 docker compose up -d api
 ```
 
+PostgreSQL and Redis are intentionally not exposed on host ports by default. Containers communicate over the internal Docker network.
+
 ### 3.3 Stop stack
 
 ```bash
