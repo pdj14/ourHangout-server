@@ -41,8 +41,6 @@ services:
       POSTGRES_DB: ${POSTGRES_DB:-ourhangout}
       POSTGRES_USER: ${POSTGRES_USER:-ourhangout}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-ourhangout_dev_pw}
-    ports:
-      - "5432:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
     healthcheck:
@@ -55,8 +53,6 @@ services:
     image: redis:7-alpine
     container_name: ourhangout-redis
     restart: unless-stopped
-    ports:
-      - "6379:6379"
     command: redis-server --appendonly yes
     volumes:
       - redis_data:/data
