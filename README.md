@@ -86,12 +86,15 @@ cp .env.example .env
 ```
 
 Default `.env.example` is already Docker-network friendly (`postgres`, `redis` hostnames).
-`docker compose up` runs `migrate` once first, then starts `api`.
+Run migrations explicitly before recreating `api`.
 
 ### 3.2 Start stack
 
 ```bash
-docker compose up -d --build
+docker compose build migrate api
+docker compose up -d postgres redis
+docker compose run --rm migrate
+docker compose up -d api
 ```
 
 ### 3.3 Stop stack
@@ -102,7 +105,7 @@ docker compose down
 
 ### 3.4 One-command deploy scripts
 
-For NAS or SSH-based deploys, these scripts pull the target branch, create required bind-mount directories, build images, run migrations, and recreate `api`.
+For NAS or SSH-based deploys, these scripts pull the target branch, create required bind-mount directories, build images, run migrations, and recreate `api`. This works with both `docker compose` v2 and legacy `docker-compose` v1 on Synology.
 
 Dev deploy (`feature/openclaw-connector` + `docker-compose.dev.yml`):
 
