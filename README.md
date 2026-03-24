@@ -100,6 +100,28 @@ docker compose up -d --build
 docker compose down
 ```
 
+### 3.4 One-command deploy scripts
+
+For NAS or SSH-based deploys, these scripts pull the target branch, create required bind-mount directories, build images, run migrations, and recreate `api`.
+
+Dev deploy (`feature/openclaw-connector` + `docker-compose.dev.yml`):
+
+```bash
+bash scripts/deploy-dev.sh
+```
+
+Main deploy (`main` + `docker-compose.yml`):
+
+```bash
+bash scripts/deploy-main.sh
+```
+
+Notes:
+
+- Script aborts if the git worktree is dirty.
+- If you really need to deploy with local changes, run `ALLOW_DIRTY=1 bash scripts/deploy-dev.sh` (or `deploy-main.sh`).
+- Required directories are created automatically: `logs`, `storage/media`, `storage/app-updates`.
+
 ## 4) Synology NAS deployment (Container Manager)
 
 Detailed guide: `docs/SYNOLOGY_DEPLOY.md`
