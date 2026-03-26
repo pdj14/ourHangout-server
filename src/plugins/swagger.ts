@@ -14,6 +14,7 @@ export const swaggerPlugin = fp(async (app) => {
         { name: 'auth', description: 'Authentication and token lifecycle' },
         { name: 'contacts', description: 'Hashed contact sync and account match lookup' },
         { name: 'pairing', description: 'One-time device pairing codes' },
+        { name: 'family', description: 'Friend-to-family upgrades, family links, groups, and permissions' },
         { name: 'bots', description: 'In-app bot discovery and bot room bootstrap' },
         { name: 'chat', description: '1:1 rooms, messages, and ACK handling' },
         { name: 'social', description: 'Profiles, friends, rooms, media, reports, and push token APIs' },

@@ -27,6 +27,8 @@ import { contactsRoutes } from './modules/contacts/contacts.routes';
 import { GuardianService } from './modules/guardian/guardian.service';
 import { guardianRoutes } from './modules/guardian/guardian.routes';
 import { guardianConsoleRoutes } from './modules/guardian/guardian.console.routes';
+import { FamilyService } from './modules/family/family.service';
+import { familyRoutes } from './modules/family/family.routes';
 import { appUpdatesRoutes } from './modules/app-updates/app-updates.routes';
 import { guardianAppUpdatesRoutes } from './modules/app-updates/app-updates.guardian.routes';
 import { FcmPushService } from './lib/push/fcm-push.service';
@@ -101,6 +103,7 @@ export async function buildServer(): Promise<FastifyInstance> {
     pushService: fcmPushService,
     logger: app.log
   });
+  const familyService = new FamilyService(db, connectionManager, app.log);
   const guardianService = new GuardianService(db, app.log);
   const botService = new BotService({
     db,
@@ -124,6 +127,7 @@ export async function buildServer(): Promise<FastifyInstance> {
   app.decorate('chatService', chatService);
   app.decorate('botService', botService);
   app.decorate('socialService', socialService);
+  app.decorate('familyService', familyService);
   app.decorate('guardianService', guardianService);
 
   registerErrorHandlers(app);
@@ -142,6 +146,7 @@ export async function buildServer(): Promise<FastifyInstance> {
   await app.register(authRoutes, { prefix: '/v1/auth' });
   await app.register(appUpdatesRoutes, { prefix: '/v1/app-updates' });
   await app.register(pairingRoutes, { prefix: '/v1/pairing' });
+  await app.register(familyRoutes, { prefix: '/v1/family' });
   await app.register(contactsRoutes, { prefix: '/v1/contacts' });
   await app.register(chatRoutes, { prefix: '/v1/chats' });
   await app.register(socialRoutes, { prefix: '/v1' });

@@ -1,6 +1,6 @@
 export type MessageKind = 'text' | 'image' | 'video' | 'system';
 export type MessageDelivery = 'sent' | 'delivered' | 'read';
-export type RoomType = 'direct' | 'group';
+export type RoomType = 'direct' | 'group' | 'family';
 
 export interface UserProfileDto {
   id: string;
@@ -14,13 +14,24 @@ export interface UserProfileDto {
 export interface FriendDto {
   id: string;
   name: string;
+  profileName: string;
+  aliasName?: string;
   status?: string;
   avatarUri?: string;
   trusted: boolean;
+  family?: {
+    isFamily: true;
+    relationshipId: string;
+    relationshipType: 'parent_child';
+    displayLabel?: 'mother' | 'father' | 'guardian' | 'child';
+    familyGroupId?: string;
+    status: 'active';
+  };
 }
 
 export interface RoomDto {
   id: string;
+  type: RoomType;
   title: string;
   members: string[];
   isGroup: boolean;
