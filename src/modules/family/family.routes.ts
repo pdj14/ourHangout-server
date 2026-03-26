@@ -1,8 +1,5 @@
 import type { FastifyInstance } from 'fastify';
 
-const familyLabels = ['mother', 'father', 'guardian', 'child'] as const;
-const familyRelationshipTypes = ['parent_child'] as const;
-
 export async function familyRoutes(app: FastifyInstance): Promise<void> {
   app.post(
     '/upgrade-requests',
@@ -13,12 +10,9 @@ export async function familyRoutes(app: FastifyInstance): Promise<void> {
         summary: 'Create family upgrade request from an existing friend',
         body: {
           type: 'object',
-          required: ['targetUserId', 'relationshipType', 'requesterLabel', 'targetLabel'],
+          required: ['targetUserId'],
           properties: {
             targetUserId: { type: 'string', format: 'uuid' },
-            relationshipType: { type: 'string', enum: [...familyRelationshipTypes] },
-            requesterLabel: { type: 'string', enum: [...familyLabels] },
-            targetLabel: { type: 'string', enum: [...familyLabels] },
             note: { type: 'string', maxLength: 300 }
           }
         }
@@ -27,17 +21,11 @@ export async function familyRoutes(app: FastifyInstance): Promise<void> {
     async (request) => {
       const body = request.body as {
         targetUserId: string;
-        relationshipType: 'parent_child';
-        requesterLabel: 'mother' | 'father' | 'guardian' | 'child';
-        targetLabel: 'mother' | 'father' | 'guardian' | 'child';
         note?: string;
       };
       const data = await app.familyService.createUpgradeRequest({
         requesterId: request.user.sub,
         targetUserId: body.targetUserId,
-        relationshipType: body.relationshipType,
-        requesterLabel: body.requesterLabel,
-        targetLabel: body.targetLabel,
         note: body.note
       });
       return { success: true, data };

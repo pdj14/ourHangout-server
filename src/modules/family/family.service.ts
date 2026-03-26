@@ -104,13 +104,6 @@ type GroupMemberRow = {
   joined_at: Date;
 };
 
-type SeedPermission = {
-  actorUserId: string;
-  subjectUserId: string | null;
-  serviceKey: FamilyServiceKey;
-  permissionLevel: Exclude<FamilyPermissionLevel, 'none'>;
-};
-
 const UPGRADE_REQUEST_TTL_DAYS = 7;
 const PARENTISH_LABELS = new Set<FamilyLabel>(['mother', 'father', 'guardian']);
 
@@ -134,49 +127,6 @@ function toMemberRole(label: FamilyLabel): FamilyMemberRole {
   return 'parent';
 }
 
-function validateFamilyLabels(requesterLabel: FamilyLabel, targetLabel: FamilyLabel): void {
-  if (isParentish(requesterLabel) === isParentish(targetLabel)) {
-    throw new AppError(
-      409,
-      ErrorCodes.CONFLICT,
-      'Family upgrade requires one parent/guardian label and one child label.'
-    );
-  }
-}
-
-function validateRoleAgainstLabel(role: UserRole, label: FamilyLabel): void {
-  if (label === 'child' && role !== 'user') {
-    throw new AppError(409, ErrorCodes.CONFLICT, 'Child label requires a child/user account.');
-  }
-  if (label !== 'child' && role !== 'parent') {
-    throw new AppError(409, ErrorCodes.CONFLICT, 'Parent/guardian label requires a parent account.');
-  }
-}
-
-function buildSeedPermissions(params: {
-  requesterId: string;
-  targetUserId: string;
-  requesterLabel: FamilyLabel;
-  targetLabel: FamilyLabel;
-}): SeedPermission[] {
-  const requesterIsParentish = isParentish(params.requesterLabel);
-  const caregiverUserId = requesterIsParentish ? params.requesterId : params.targetUserId;
-  const caregiverLabel = requesterIsParentish ? params.requesterLabel : params.targetLabel;
-  const childUserId = requesterIsParentish ? params.targetUserId : params.requesterId;
-  const caregiverManageLevel: Exclude<FamilyPermissionLevel, 'none'> =
-    caregiverLabel === 'guardian' ? 'edit' : 'manage';
-
-  return [
-    { actorUserId: caregiverUserId, subjectUserId: childUserId, serviceKey: 'location', permissionLevel: 'view' },
-    { actorUserId: caregiverUserId, subjectUserId: childUserId, serviceKey: 'schedule', permissionLevel: caregiverManageLevel },
-    { actorUserId: caregiverUserId, subjectUserId: childUserId, serviceKey: 'todo', permissionLevel: caregiverManageLevel },
-    { actorUserId: caregiverUserId, subjectUserId: null, serviceKey: 'family_calendar', permissionLevel: 'view' },
-    { actorUserId: childUserId, subjectUserId: null, serviceKey: 'family_calendar', permissionLevel: 'view' },
-    { actorUserId: childUserId, subjectUserId: childUserId, serviceKey: 'schedule', permissionLevel: 'view' },
-    { actorUserId: childUserId, subjectUserId: childUserId, serviceKey: 'todo', permissionLevel: 'view' }
-  ];
-}
-
 export class FamilyService {
   constructor(
     private readonly db: Pool,
@@ -187,9 +137,6 @@ export class FamilyService {
   async createUpgradeRequest(params: {
     requesterId: string;
     targetUserId: string;
-    relationshipType: FamilyRelationshipType;
-    requesterLabel: FamilyLabel;
-    targetLabel: FamilyLabel;
     note?: string;
   }): Promise<{
     requestId: string;
@@ -208,15 +155,11 @@ export class FamilyService {
       throw new AppError(409, ErrorCodes.CONFLICT, 'Cannot create a family upgrade request for yourself.');
     }
 
-    validateFamilyLabels(params.requesterLabel, params.targetLabel);
-
-    const users = await this.fetchUsers(params.requesterId, targetUserId);
-    validateRoleAgainstLabel(users[params.requesterId].role, params.requesterLabel);
-    validateRoleAgainstLabel(users[targetUserId].role, params.targetLabel);
+    await this.fetchUsers(params.requesterId, targetUserId);
 
     await this.assertFriendship(params.requesterId, targetUserId);
-    await this.assertNoActiveFamilyLink(params.requesterId, targetUserId, params.relationshipType);
-    await this.assertNoPendingRequest(params.requesterId, targetUserId, params.relationshipType);
+    await this.assertNoActiveFamilyLink(params.requesterId, targetUserId, 'parent_child');
+    await this.assertNoPendingRequest(params.requesterId, targetUserId, 'parent_child');
 
     const sourceRelationshipId = await this.findFriendRelationshipId(params.requesterId, targetUserId);
     const note = (params.note || '').trim();
@@ -241,9 +184,9 @@ export class FamilyService {
         params.requesterId,
         targetUserId,
         sourceRelationshipId,
-        params.relationshipType,
-        params.requesterLabel,
-        params.targetLabel,
+        'parent_child',
+        'guardian',
+        'child',
         note || null,
         expiresAt
       ]
@@ -259,9 +202,9 @@ export class FamilyService {
       requestId,
       status: 'pending',
       targetUserId,
-      relationshipType: params.relationshipType,
-      requesterLabel: params.requesterLabel,
-      targetLabel: params.targetLabel,
+      relationshipType: 'parent_child',
+      requesterLabel: 'guardian',
+      targetLabel: 'child',
       createdAt: inserted.rows[0].created_at.toISOString()
     };
   }
@@ -363,17 +306,14 @@ export class FamilyService {
     relationshipId: string;
     relationshipType: FamilyRelationshipType;
     roomId: string;
-    permissionsSeeded: true;
+    permissionsSeeded: false;
   }> {
     const client = await this.db.connect();
     try {
       await client.query('BEGIN');
 
       const request = await this.getPendingRequestForTarget(client, userId, requestId);
-      const users = await this.fetchUsersWithClient(client, request.requester_id, request.target_user_id);
-      validateFamilyLabels(request.requester_label, request.target_label);
-      validateRoleAgainstLabel(users[request.requester_id].role, request.requester_label);
-      validateRoleAgainstLabel(users[request.target_user_id].role, request.target_label);
+      await this.fetchUsersWithClient(client, request.requester_id, request.target_user_id);
       await this.assertFriendship(request.requester_id, request.target_user_id, client);
 
       const familyGroupId = await this.resolveFamilyGroupId(client, request.requester_id, request.target_user_id);
@@ -385,7 +325,6 @@ export class FamilyService {
         request.target_user_id,
         request.requester_id
       );
-      await this.seedPermissions(client, familyGroupId, request);
 
       await client.query(
         `UPDATE family_upgrade_requests
@@ -421,7 +360,7 @@ export class FamilyService {
         relationshipId,
         relationshipType: request.requested_relationship_type,
         roomId,
-        permissionsSeeded: true
+        permissionsSeeded: false
       };
     } catch (error) {
       await client.query('ROLLBACK');
@@ -1019,53 +958,6 @@ export class FamilyService {
     );
 
     return roomId;
-  }
-
-  private async seedPermissions(client: PoolClient, familyGroupId: string, request: UpgradeRequestForUpdateRow): Promise<void> {
-    const permissions = buildSeedPermissions({
-      requesterId: request.requester_id,
-      targetUserId: request.target_user_id,
-      requesterLabel: request.requester_label,
-      targetLabel: request.target_label
-    });
-
-    await client.query(
-      `DELETE FROM family_service_permissions
-       WHERE family_group_id = $1
-         AND (
-           (actor_user_id = $2 AND (subject_user_id = $3 OR subject_user_id IS NULL)) OR
-           (actor_user_id = $3 AND (subject_user_id = $2 OR subject_user_id IS NULL))
-         )
-         AND service_key = ANY($4::text[])`,
-      [
-        familyGroupId,
-        request.requester_id,
-        request.target_user_id,
-        Array.from(new Set(permissions.map((item) => item.serviceKey)))
-      ]
-    );
-
-    for (const permission of permissions) {
-      await client.query(
-        `INSERT INTO family_service_permissions (
-           family_group_id,
-           actor_user_id,
-           subject_user_id,
-           service_key,
-           permission_level,
-           created_at,
-           updated_at
-         )
-         VALUES ($1, $2, $3, $4, $5, NOW(), NOW())`,
-        [
-          familyGroupId,
-          permission.actorUserId,
-          permission.subjectUserId,
-          permission.serviceKey,
-          permission.permissionLevel
-        ]
-      );
-    }
   }
 
   private async listPermissionMapForActor(
