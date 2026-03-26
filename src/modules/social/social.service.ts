@@ -34,6 +34,7 @@ type FriendRow = {
   friend_status: string | null;
   friend_avatar_url: string | null;
   friend_email: string;
+  family_relationship_id: string | null;
   family_group_id: string | null;
   family_relationship_type: 'parent_child' | null;
   family_status: 'active' | null;
@@ -629,6 +630,7 @@ export class SocialService {
       trusted: boolean;
       family?: {
         isFamily: true;
+        relationshipId: string;
         relationshipType: 'parent_child';
         displayLabel?: 'mother' | 'father' | 'guardian' | 'child';
         familyGroupId: string;
@@ -649,6 +651,7 @@ export class SocialService {
               u.status_message AS friend_status,
               u.avatar_url AS friend_avatar_url,
               u.email AS friend_email,
+              family_rel.id AS family_relationship_id,
               family_rel.family_group_id,
               family_rel.relationship_type AS family_relationship_type,
               family_rel.status AS family_status,
@@ -686,10 +689,11 @@ export class SocialService {
       ...(row.friend_status ? { status: row.friend_status } : {}),
       ...(row.friend_avatar_url ? { avatarUri: row.friend_avatar_url } : {}),
       trusted: row.trusted,
-      ...(row.family_group_id && row.family_relationship_type && row.family_status
+      ...(row.family_relationship_id && row.family_group_id && row.family_relationship_type && row.family_status
         ? {
             family: {
               isFamily: true as const,
+              relationshipId: row.family_relationship_id,
               relationshipType: row.family_relationship_type,
               ...(row.family_display_label ? { displayLabel: row.family_display_label } : {}),
               familyGroupId: row.family_group_id,

@@ -422,6 +422,116 @@ export class FamilyService {
     return { requestId, status: 'canceled' };
   }
 
+  async removeLink(
+    userId: string,
+    relationshipId: string
+  ): Promise<{ relationshipId: string; status: 'deleted'; peerUserId: string }> {
+    const client = await this.db.connect();
+    try {
+      await client.query('BEGIN');
+
+      const result = await client.query<{
+        id: string;
+        family_group_id: string | null;
+        user_a_id: string;
+        user_b_id: string;
+        status: 'active' | 'blocked' | 'deleted';
+      }>(
+        `SELECT id, family_group_id, user_a_id, user_b_id, status
+         FROM user_relationships
+         WHERE id = $1
+           AND relationship_type = 'parent_child'
+         FOR UPDATE`,
+        [relationshipId]
+      );
+
+      const row = result.rows[0];
+      if (!row || row.status !== 'active') {
+        throw new AppError(404, ErrorCodes.RESOURCE_NOT_FOUND, 'Active family link not found.');
+      }
+
+      if (row.user_a_id !== userId && row.user_b_id !== userId) {
+        throw new AppError(403, ErrorCodes.FORBIDDEN, 'Family link access is not allowed.');
+      }
+
+      await client.query(
+        `UPDATE user_relationships
+         SET status = 'deleted',
+             metadata = jsonb_set(COALESCE(metadata, '{}'::jsonb), '{removedBy}', to_jsonb($2::text), true)
+         WHERE id = $1`,
+        [relationshipId, userId]
+      );
+
+      if (row.family_group_id) {
+        const memberIds = [row.user_a_id, row.user_b_id];
+        for (const memberUserId of memberIds) {
+          const activeLinks = await client.query<{ count: string }>(
+            `SELECT COUNT(*)::text AS count
+             FROM user_relationships
+             WHERE family_group_id = $1
+               AND status = 'active'
+               AND relationship_type = 'parent_child'
+               AND (user_a_id = $2 OR user_b_id = $2)`,
+            [row.family_group_id, memberUserId]
+          );
+
+          if (Number(activeLinks.rows[0]?.count || '0') === 0) {
+            await client.query(
+              `UPDATE family_group_members
+               SET status = 'removed',
+                   removed_at = NOW()
+               WHERE family_group_id = $1
+                 AND user_id = $2
+                 AND status = 'active'`,
+              [row.family_group_id, memberUserId]
+            );
+          }
+        }
+
+        const activeMembers = await client.query<{ count: string }>(
+          `SELECT COUNT(*)::text AS count
+           FROM family_group_members
+           WHERE family_group_id = $1
+             AND status = 'active'`,
+          [row.family_group_id]
+        );
+
+        if (Number(activeMembers.rows[0]?.count || '0') === 0) {
+          await client.query(
+            `UPDATE family_groups
+             SET status = 'archived',
+                 updated_at = NOW()
+             WHERE id = $1`,
+            [row.family_group_id]
+          );
+        }
+      }
+
+      await client.query('COMMIT');
+
+      const peerUserId = row.user_a_id === userId ? row.user_b_id : row.user_a_id;
+      this.emitToUsers([row.user_a_id, row.user_b_id], {
+        event: 'family.updated',
+        data: { type: 'link.removed', relationshipId, peerUserId }
+      });
+      this.emitToUsers([row.user_a_id, row.user_b_id], {
+        event: 'friend.updated',
+        data: { type: 'family.removed', peerUserId }
+      });
+
+      return {
+        relationshipId,
+        status: 'deleted',
+        peerUserId
+      };
+    } catch (error) {
+      await client.query('ROLLBACK');
+      throw error;
+    } finally {
+      client.release();
+    }
+  }
+
   async listLinks(userId: string): Promise<
     Array<{
       relationshipId: string;

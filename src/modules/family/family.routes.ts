@@ -131,6 +131,29 @@ export async function familyRoutes(app: FastifyInstance): Promise<void> {
     }
   );
 
+  app.delete(
+    '/links/:relationshipId',
+    {
+      preHandler: app.authenticate,
+      schema: {
+        tags: ['family'],
+        summary: 'Remove an active family link and keep the friend connection',
+        params: {
+          type: 'object',
+          required: ['relationshipId'],
+          properties: {
+            relationshipId: { type: 'string', format: 'uuid' }
+          }
+        }
+      }
+    },
+    async (request) => {
+      const params = request.params as { relationshipId: string };
+      const data = await app.familyService.removeLink(request.user.sub, params.relationshipId);
+      return { success: true, data };
+    }
+  );
+
   app.get(
     '/groups/me',
     {

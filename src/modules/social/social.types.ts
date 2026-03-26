@@ -19,6 +19,7 @@ export interface FriendDto {
   trusted: boolean;
   family?: {
     isFamily: true;
+    relationshipId: string;
     relationshipType: 'parent_child';
     displayLabel?: 'mother' | 'father' | 'guardian' | 'child';
     familyGroupId: string;
