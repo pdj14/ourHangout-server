@@ -263,6 +263,36 @@ export async function socialRoutes(app: FastifyInstance): Promise<void> {
     }
   );
 
+  app.patch(
+    '/friends/:friendUserId/alias',
+    {
+      preHandler: app.authenticate,
+      schema: {
+        tags: ['social'],
+        summary: 'Set or clear a personal alias for a friend',
+        params: {
+          type: 'object',
+          required: ['friendUserId'],
+          properties: {
+            friendUserId: { type: 'string', format: 'uuid' }
+          }
+        },
+        body: {
+          type: 'object',
+          properties: {
+            alias: { type: ['string', 'null'], minLength: 1, maxLength: 100 }
+          }
+        }
+      }
+    },
+    async (request) => {
+      const params = request.params as { friendUserId: string };
+      const body = (request.body as { alias?: string | null } | undefined) ?? {};
+      const data = await app.socialService.setFriendAlias(request.user.sub, params.friendUserId, body.alias);
+      return { success: true, data };
+    }
+  );
+
   app.get(
     '/rooms',
     {

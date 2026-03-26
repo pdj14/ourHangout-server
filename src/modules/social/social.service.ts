@@ -34,6 +34,8 @@ type FriendRow = {
   friend_status: string | null;
   friend_avatar_url: string | null;
   friend_email: string;
+  alias_name: string | null;
+  family_custom_label: string | null;
   family_relationship_id: string | null;
   family_group_id: string | null;
   family_relationship_type: 'parent_child' | null;
@@ -625,6 +627,8 @@ export class SocialService {
     items: Array<{
       id: string;
       name: string;
+      profileName: string;
+      aliasName?: string;
       status?: string;
       avatarUri?: string;
       trusted: boolean;
@@ -651,6 +655,8 @@ export class SocialService {
               u.status_message AS friend_status,
               u.avatar_url AS friend_avatar_url,
               u.email AS friend_email,
+              ua.alias AS alias_name,
+              peer_member.custom_label AS family_custom_label,
               family_rel.id AS family_relationship_id,
               family_rel.family_group_id,
               family_rel.relationship_type AS family_relationship_type,
@@ -661,6 +667,9 @@ export class SocialService {
               END AS family_display_label
        FROM friendships f
        INNER JOIN users u ON u.id = f.friend_user_id
+       LEFT JOIN user_aliases ua
+              ON ua.owner_user_id = f.user_id
+             AND ua.target_user_id = f.friend_user_id
        LEFT JOIN user_relationships family_rel
               ON family_rel.pair_key = CONCAT(
                 LEAST(f.user_id::text, f.friend_user_id::text),
@@ -669,6 +678,10 @@ export class SocialService {
               )
              AND family_rel.relationship_type = 'parent_child'
              AND family_rel.status = 'active'
+       LEFT JOIN family_group_members peer_member
+              ON peer_member.family_group_id = family_rel.family_group_id
+             AND peer_member.user_id = f.friend_user_id
+             AND peer_member.status = 'active'
        WHERE f.user_id = $1
           AND (
             $2::timestamptz IS NULL OR
@@ -683,13 +696,18 @@ export class SocialService {
     const hasMore = result.rows.length > limit;
     const rows = hasMore ? result.rows.slice(0, limit) : result.rows;
 
-    const items = rows.map((row) => ({
-      id: row.friend_user_id,
-      name: normalizeName(row.friend_name, row.friend_email),
-      ...(row.friend_status ? { status: row.friend_status } : {}),
-      ...(row.friend_avatar_url ? { avatarUri: row.friend_avatar_url } : {}),
-      trusted: row.trusted,
-      ...(row.family_relationship_id && row.family_relationship_type && row.family_status
+    const items = rows.map((row) => {
+      const profileName = normalizeName(row.friend_name, row.friend_email);
+      const aliasName = (row.alias_name || row.family_custom_label || '').trim();
+      return {
+        id: row.friend_user_id,
+        name: aliasName || profileName,
+        profileName,
+        ...(aliasName ? { aliasName } : {}),
+        ...(row.friend_status ? { status: row.friend_status } : {}),
+        ...(row.friend_avatar_url ? { avatarUri: row.friend_avatar_url } : {}),
+        trusted: row.trusted,
+        ...(row.family_relationship_id && row.family_relationship_type && row.family_status
         ? {
             family: {
               isFamily: true as const,
@@ -701,7 +719,8 @@ export class SocialService {
             }
           }
         : {})
-    }));
+      };
+    });
 
     const last = rows[rows.length - 1];
     return {
@@ -1088,6 +1107,68 @@ export class SocialService {
 
     return {
       trusted: result.rows[0].trusted
+    };
+  }
+
+  async setFriendAlias(
+    userId: string,
+    friendUserId: string,
+    aliasInput?: string | null
+  ): Promise<{ friendUserId: string; profileName: string; displayName: string; aliasName?: string }> {
+    if (!(await this.isFriends(userId, friendUserId))) {
+      throw new AppError(404, ErrorCodes.RESOURCE_NOT_FOUND, 'Friendship not found.');
+    }
+
+    const alias = (aliasInput || '').trim();
+    if (alias.length > 100) {
+      throw new AppError(400, ErrorCodes.VALIDATION_ERROR, 'Alias must be 1-100 characters.');
+    }
+
+    if (!alias) {
+      await this.db.query(
+        `DELETE FROM user_aliases
+         WHERE owner_user_id = $1
+           AND target_user_id = $2`,
+        [userId, friendUserId]
+      );
+    } else {
+      await this.db.query(
+        `INSERT INTO user_aliases (owner_user_id, target_user_id, alias, created_at, updated_at)
+         VALUES ($1, $2, $3, NOW(), NOW())
+         ON CONFLICT (owner_user_id, target_user_id)
+         DO UPDATE SET
+           alias = EXCLUDED.alias,
+           updated_at = NOW()`,
+        [userId, friendUserId, alias]
+      );
+    }
+
+    const friendResult = await this.db.query<{ display_name: string | null; email: string }>(
+      `SELECT display_name, email
+       FROM users
+       WHERE id = $1
+       LIMIT 1`,
+      [friendUserId]
+    );
+    const row = friendResult.rows[0];
+    if (!row) {
+      throw new AppError(404, ErrorCodes.RESOURCE_NOT_FOUND, 'Target user not found.');
+    }
+    const profileName = normalizeName(row.display_name, row.email);
+
+    this.emitToUsers([userId], {
+      event: 'friend.updated',
+      data: {
+        type: 'alias.changed',
+        friendUserId
+      }
+    });
+
+    return {
+      friendUserId,
+      profileName,
+      displayName: alias || profileName,
+      ...(alias ? { aliasName: alias } : {})
     };
   }
 

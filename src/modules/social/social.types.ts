@@ -14,6 +14,8 @@ export interface UserProfileDto {
 export interface FriendDto {
   id: string;
   name: string;
+  profileName: string;
+  aliasName?: string;
   status?: string;
   avatarUri?: string;
   trusted: boolean;
