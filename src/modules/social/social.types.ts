@@ -17,6 +17,13 @@ export interface FriendDto {
   status?: string;
   avatarUri?: string;
   trusted: boolean;
+  family?: {
+    isFamily: true;
+    relationshipType: 'parent_child';
+    displayLabel?: 'mother' | 'father' | 'guardian' | 'child';
+    familyGroupId: string;
+    status: 'active';
+  };
 }
 
 export interface RoomDto {

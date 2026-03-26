@@ -34,6 +34,10 @@ type FriendRow = {
   friend_status: string | null;
   friend_avatar_url: string | null;
   friend_email: string;
+  family_group_id: string | null;
+  family_relationship_type: 'parent_child' | null;
+  family_status: 'active' | null;
+  family_display_label: 'mother' | 'father' | 'guardian' | 'child' | null;
 };
 
 type FriendSearchRow = {
@@ -623,6 +627,13 @@ export class SocialService {
       status?: string;
       avatarUri?: string;
       trusted: boolean;
+      family?: {
+        isFamily: true;
+        relationshipType: 'parent_child';
+        displayLabel?: 'mother' | 'father' | 'guardian' | 'child';
+        familyGroupId: string;
+        status: 'active';
+      };
     }>;
     nextCursor?: string;
   }> {
@@ -637,12 +648,27 @@ export class SocialService {
               u.display_name AS friend_name,
               u.status_message AS friend_status,
               u.avatar_url AS friend_avatar_url,
-              u.email AS friend_email
+              u.email AS friend_email,
+              family_rel.family_group_id,
+              family_rel.relationship_type AS family_relationship_type,
+              family_rel.status AS family_status,
+              CASE
+                WHEN family_rel.user_a_id = f.user_id THEN family_rel.label_for_user_a
+                ELSE family_rel.label_for_user_b
+              END AS family_display_label
        FROM friendships f
        INNER JOIN users u ON u.id = f.friend_user_id
+       LEFT JOIN user_relationships family_rel
+              ON family_rel.pair_key = CONCAT(
+                LEAST(f.user_id::text, f.friend_user_id::text),
+                ':',
+                GREATEST(f.user_id::text, f.friend_user_id::text)
+              )
+             AND family_rel.relationship_type = 'parent_child'
+             AND family_rel.status = 'active'
        WHERE f.user_id = $1
-         AND (
-           $2::timestamptz IS NULL OR
+          AND (
+            $2::timestamptz IS NULL OR
            f.created_at < $2 OR
            (f.created_at = $2 AND f.id < $3::uuid)
          )
@@ -659,7 +685,18 @@ export class SocialService {
       name: normalizeName(row.friend_name, row.friend_email),
       ...(row.friend_status ? { status: row.friend_status } : {}),
       ...(row.friend_avatar_url ? { avatarUri: row.friend_avatar_url } : {}),
-      trusted: row.trusted
+      trusted: row.trusted,
+      ...(row.family_group_id && row.family_relationship_type && row.family_status
+        ? {
+            family: {
+              isFamily: true as const,
+              relationshipType: row.family_relationship_type,
+              ...(row.family_display_label ? { displayLabel: row.family_display_label } : {}),
+              familyGroupId: row.family_group_id,
+              status: row.family_status
+            }
+          }
+        : {})
     }));
 
     const last = rows[rows.length - 1];
