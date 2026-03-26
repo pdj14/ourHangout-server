@@ -22,7 +22,7 @@ export interface FriendDto {
     relationshipId: string;
     relationshipType: 'parent_child';
     displayLabel?: 'mother' | 'father' | 'guardian' | 'child';
-    familyGroupId: string;
+    familyGroupId?: string;
     status: 'active';
   };
 }

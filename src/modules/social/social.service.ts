@@ -633,7 +633,7 @@ export class SocialService {
         relationshipId: string;
         relationshipType: 'parent_child';
         displayLabel?: 'mother' | 'father' | 'guardian' | 'child';
-        familyGroupId: string;
+        familyGroupId?: string;
         status: 'active';
       };
     }>;
@@ -689,14 +689,14 @@ export class SocialService {
       ...(row.friend_status ? { status: row.friend_status } : {}),
       ...(row.friend_avatar_url ? { avatarUri: row.friend_avatar_url } : {}),
       trusted: row.trusted,
-      ...(row.family_relationship_id && row.family_group_id && row.family_relationship_type && row.family_status
+      ...(row.family_relationship_id && row.family_relationship_type && row.family_status
         ? {
             family: {
               isFamily: true as const,
               relationshipId: row.family_relationship_id,
               relationshipType: row.family_relationship_type,
               ...(row.family_display_label ? { displayLabel: row.family_display_label } : {}),
-              familyGroupId: row.family_group_id,
+              ...(row.family_group_id ? { familyGroupId: row.family_group_id } : {}),
               status: row.family_status
             }
           }
