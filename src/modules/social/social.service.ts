@@ -34,13 +34,21 @@ type FriendRow = {
   friend_status: string | null;
   friend_avatar_url: string | null;
   friend_email: string;
-  alias_name: string | null;
-  family_custom_label: string | null;
-  family_relationship_id: string | null;
+};
+
+type FriendAliasRow = {
+  target_user_id: string;
+  alias: string | null;
+};
+
+type FriendFamilySummaryRow = {
+  peer_user_id: string;
+  relationship_id: string;
   family_group_id: string | null;
-  family_relationship_type: 'parent_child' | null;
-  family_status: 'active' | null;
-  family_display_label: 'mother' | 'father' | 'guardian' | 'child' | null;
+  relationship_type: 'parent_child';
+  status: 'active';
+  display_label: 'mother' | 'father' | 'guardian' | 'child' | null;
+  custom_label: string | null;
 };
 
 type FriendSearchRow = {
@@ -654,34 +662,9 @@ export class SocialService {
               u.display_name AS friend_name,
               u.status_message AS friend_status,
               u.avatar_url AS friend_avatar_url,
-              u.email AS friend_email,
-              ua.alias AS alias_name,
-              peer_member.custom_label AS family_custom_label,
-              family_rel.id AS family_relationship_id,
-              family_rel.family_group_id,
-              family_rel.relationship_type AS family_relationship_type,
-              family_rel.status AS family_status,
-              CASE
-                WHEN family_rel.user_a_id = f.user_id THEN family_rel.label_for_user_a
-                ELSE family_rel.label_for_user_b
-              END AS family_display_label
+              u.email AS friend_email
        FROM friendships f
        INNER JOIN users u ON u.id = f.friend_user_id
-       LEFT JOIN user_aliases ua
-              ON ua.owner_user_id = f.user_id
-             AND ua.target_user_id = f.friend_user_id
-       LEFT JOIN user_relationships family_rel
-              ON family_rel.pair_key = CONCAT(
-                LEAST(f.user_id::text, f.friend_user_id::text),
-                ':',
-                GREATEST(f.user_id::text, f.friend_user_id::text)
-              )
-             AND family_rel.relationship_type = 'parent_child'
-             AND family_rel.status = 'active'
-       LEFT JOIN family_group_members peer_member
-              ON peer_member.family_group_id = family_rel.family_group_id
-             AND peer_member.user_id = f.friend_user_id
-             AND peer_member.status = 'active'
        WHERE f.user_id = $1
           AND (
             $2::timestamptz IS NULL OR
@@ -695,10 +678,74 @@ export class SocialService {
 
     const hasMore = result.rows.length > limit;
     const rows = hasMore ? result.rows.slice(0, limit) : result.rows;
+    const friendUserIds = rows.map((row) => row.friend_user_id);
+    const aliasesByTarget = new Map<string, string>();
+    const familyByPeer = new Map<string, FriendFamilySummaryRow>();
+
+    if (friendUserIds.length > 0) {
+      try {
+        const aliasResult = await this.db.query<FriendAliasRow>(
+          `SELECT target_user_id, alias
+           FROM user_aliases
+           WHERE owner_user_id = $1
+             AND target_user_id = ANY($2::uuid[])`,
+          [params.userId, friendUserIds]
+        );
+        aliasResult.rows.forEach((row) => {
+          const alias = (row.alias || '').trim();
+          if (alias) {
+            aliasesByTarget.set(row.target_user_id, alias);
+          }
+        });
+      } catch (error) {
+        this.logger.warn({ error, userId: params.userId }, 'Failed to load friend aliases. Falling back to profile names.');
+      }
+
+      try {
+        const familyResult = await this.db.query<FriendFamilySummaryRow>(
+          `SELECT peer_user_id,
+                  relationship_id,
+                  family_group_id,
+                  relationship_type,
+                  status,
+                  display_label,
+                  custom_label
+           FROM (
+             SELECT CASE WHEN ur.user_a_id = $1 THEN ur.user_b_id ELSE ur.user_a_id END AS peer_user_id,
+                    ur.id AS relationship_id,
+                    ur.family_group_id,
+                    ur.relationship_type,
+                    ur.status,
+                    CASE
+                      WHEN ur.user_a_id = $1 THEN ur.label_for_user_a
+                      ELSE ur.label_for_user_b
+                    END AS display_label,
+                    peer_member.custom_label
+             FROM user_relationships ur
+             LEFT JOIN family_group_members peer_member
+                    ON peer_member.family_group_id = ur.family_group_id
+                   AND peer_member.user_id = CASE WHEN ur.user_a_id = $1 THEN ur.user_b_id ELSE ur.user_a_id END
+                   AND peer_member.status = 'active'
+             WHERE ur.relationship_type = 'parent_child'
+               AND ur.status = 'active'
+               AND (ur.user_a_id = $1 OR ur.user_b_id = $1)
+           ) AS family_links
+           WHERE peer_user_id = ANY($2::uuid[])`,
+          [params.userId, friendUserIds]
+        );
+        familyResult.rows.forEach((row) => {
+          familyByPeer.set(row.peer_user_id, row);
+        });
+      } catch (error) {
+        this.logger.warn({ error, userId: params.userId }, 'Failed to load family summaries. Returning friend list only.');
+      }
+    }
 
     const items = rows.map((row) => {
       const profileName = normalizeName(row.friend_name, row.friend_email);
-      const aliasName = (row.alias_name || row.family_custom_label || '').trim();
+      const family = familyByPeer.get(row.friend_user_id);
+      const familyLabel = (family?.custom_label || family?.display_label || '').trim();
+      const aliasName = aliasesByTarget.get(row.friend_user_id) || familyLabel;
       return {
         id: row.friend_user_id,
         name: aliasName || profileName,
@@ -707,15 +754,15 @@ export class SocialService {
         ...(row.friend_status ? { status: row.friend_status } : {}),
         ...(row.friend_avatar_url ? { avatarUri: row.friend_avatar_url } : {}),
         trusted: row.trusted,
-        ...(row.family_relationship_id && row.family_relationship_type && row.family_status
+        ...(family?.relationship_id && family.relationship_type && family.status
         ? {
             family: {
               isFamily: true as const,
-              relationshipId: row.family_relationship_id,
-              relationshipType: row.family_relationship_type,
-              ...(row.family_display_label ? { displayLabel: row.family_display_label } : {}),
-              ...(row.family_group_id ? { familyGroupId: row.family_group_id } : {}),
-              status: row.family_status
+              relationshipId: family.relationship_id,
+              relationshipType: family.relationship_type,
+              ...(family.display_label ? { displayLabel: family.display_label } : {}),
+              ...(family.family_group_id ? { familyGroupId: family.family_group_id } : {}),
+              status: family.status
             }
           }
         : {})
