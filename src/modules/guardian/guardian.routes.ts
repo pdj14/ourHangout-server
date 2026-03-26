@@ -193,7 +193,7 @@ export async function guardianRoutes(app: FastifyInstance): Promise<void> {
         querystring: {
           type: 'object',
           properties: {
-            type: { type: 'string', enum: ['direct', 'group'] },
+            type: { type: 'string', enum: ['direct', 'group', 'family'] },
             memberUserId: { type: 'string', format: 'uuid' },
             q: { type: 'string', minLength: 1, maxLength: 100 },
             limit: { type: 'number', minimum: 1, maximum: 120 }

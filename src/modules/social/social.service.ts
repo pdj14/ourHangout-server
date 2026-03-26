@@ -1254,6 +1254,7 @@ export class SocialService {
 
   async listRooms(params: {
     userId: string;
+    type?: RoomType;
     limit?: number;
     cursor?: string;
   }): Promise<{ items: RoomDto[]; nextCursor?: string }> {
@@ -1309,6 +1310,7 @@ export class SocialService {
        WHERE mem.user_id = $1
          AND mem.left_at IS NULL
          AND r.deleted_at IS NULL
+         AND ($5::text IS NULL OR r.type = $5)
          AND (
            r.type <> 'direct' OR
            2 <= (
@@ -1325,7 +1327,7 @@ export class SocialService {
          )
        ORDER BY r.updated_at DESC, r.id DESC
        LIMIT $4`,
-      [params.userId, cursor?.at ?? null, cursor?.id ?? null, limit + 1]
+      [params.userId, cursor?.at ?? null, cursor?.id ?? null, limit + 1, params.type ?? null]
     );
 
     const hasMore = result.rows.length > limit;
@@ -1392,77 +1394,28 @@ export class SocialService {
       memberUserIds: string[];
     }
   ): Promise<RoomDto> {
-    const title = params.title.trim();
-    if (title.length < 1 || title.length > 100) {
-      throw new AppError(400, ErrorCodes.VALIDATION_ERROR, 'Group title must be 1-100 characters.');
+    return this.createSharedRoom(userId, params, 'group');
+  }
+
+  async createFamilyRoom(
+    userId: string,
+    params: {
+      title: string;
+      memberUserIds: string[];
     }
+  ): Promise<RoomDto> {
+    return this.createSharedRoom(userId, params, 'family');
+  }
 
-    const uniqMemberIds = Array.from(new Set([userId, ...params.memberUserIds]));
-    if (uniqMemberIds.length < 2) {
-      throw new AppError(400, ErrorCodes.VALIDATION_ERROR, 'Group room requires at least 2 members.');
+  async createRoom(
+    userId: string,
+    params: {
+      type: 'group' | 'family';
+      title: string;
+      memberUserIds: string[];
     }
-
-    const existingUsers = await this.db.query<{ id: string }>(
-      `SELECT id
-       FROM users
-       WHERE id = ANY($1::uuid[])`,
-      [uniqMemberIds]
-    );
-
-    if (existingUsers.rows.length !== uniqMemberIds.length) {
-      throw new AppError(404, ErrorCodes.RESOURCE_NOT_FOUND, 'One or more users do not exist.');
-    }
-
-    const client = await this.db.connect();
-    let roomId = '';
-
-    try {
-      await client.query('BEGIN');
-
-      const roomResult = await client.query<{ id: string }>(
-        `INSERT INTO rooms (type, title, created_by, created_at, updated_at)
-         VALUES ('group', $1, $2, NOW(), NOW())
-         RETURNING id`,
-        [title, userId]
-      );
-
-      roomId = roomResult.rows[0].id;
-
-      for (const memberId of uniqMemberIds) {
-        await client.query(
-          `INSERT INTO room_members (room_id, user_id, role, joined_at, left_at)
-           VALUES ($1, $2, $3, NOW(), NULL)
-           ON CONFLICT (room_id, user_id)
-           DO UPDATE SET
-             left_at = NULL,
-             role = EXCLUDED.role`,
-          [roomId, memberId, memberId === userId ? 'admin' : 'member']
-        );
-
-        await client.query(
-          `INSERT INTO room_user_settings (room_id, user_id, favorite, muted, created_at, updated_at)
-           VALUES ($1, $2, FALSE, FALSE, NOW(), NOW())
-           ON CONFLICT (room_id, user_id) DO NOTHING`,
-          [roomId, memberId]
-        );
-      }
-
-      await client.query('COMMIT');
-    } catch (error) {
-      await client.query('ROLLBACK');
-      throw error;
-    } finally {
-      client.release();
-    }
-
-    this.emitToUsers(uniqMemberIds, {
-      event: 'room.updated',
-      data: {
-        roomId
-      }
-    });
-
-    return this.getRoomByIdForUser(userId, roomId);
+  ): Promise<RoomDto> {
+    return this.createSharedRoom(userId, { title: params.title, memberUserIds: params.memberUserIds }, params.type);
   }
 
   async updateRoomSettings(
@@ -1488,11 +1441,11 @@ export class SocialService {
     const hasTitle = input.title !== undefined;
     const nextTitle = hasTitle ? (input.title?.trim() || '') : '';
 
-    if (hasTitle && room.type !== 'group') {
-      throw new AppError(409, ErrorCodes.CONFLICT, 'Only group room title can be changed.');
+    if (hasTitle && room.type === 'direct') {
+      throw new AppError(409, ErrorCodes.CONFLICT, 'Only group/family room title can be changed.');
     }
     if (hasTitle && (nextTitle.length < 1 || nextTitle.length > 100)) {
-      throw new AppError(400, ErrorCodes.VALIDATION_ERROR, 'Group title must be 1-100 characters.');
+      throw new AppError(400, ErrorCodes.VALIDATION_ERROR, 'Shared room title must be 1-100 characters.');
     }
 
     const result = await this.db.query<{ favorite: boolean; muted: boolean }>(
@@ -1538,7 +1491,7 @@ export class SocialService {
 
   async leaveRoom(userId: string, roomId: string): Promise<{ left: boolean }> {
     const room = await this.assertRoomMembership(roomId, userId);
-    if (room.type !== 'group') {
+    if (room.type === 'direct') {
       throw new AppError(409, ErrorCodes.CONFLICT, 'Use DELETE /rooms/:roomId for direct rooms.');
     }
 
@@ -1614,7 +1567,7 @@ export class SocialService {
     }
 
     if (room.created_by !== userId) {
-      throw new AppError(403, ErrorCodes.FORBIDDEN, 'Only room creator can delete group room.');
+      throw new AppError(403, ErrorCodes.FORBIDDEN, 'Only room creator can delete group/family room.');
     }
 
     await this.db.query(
@@ -2558,13 +2511,16 @@ export class SocialService {
     const title =
       row.type === 'group'
         ? row.title?.trim() || 'Group'
-        : directTitle ?? row.title?.trim() ?? 'Direct';
+        : row.type === 'family'
+          ? row.title?.trim() || 'Family'
+          : directTitle ?? row.title?.trim() ?? 'Direct';
 
     return {
       id: row.id,
+      type: row.type,
       title,
       members,
-      isGroup: row.type === 'group',
+      isGroup: row.type !== 'direct',
       favorite: row.favorite ?? false,
       muted: row.muted ?? false,
       unread: Number(row.unread_count) || 0,
@@ -2700,12 +2656,13 @@ export class SocialService {
 
     for (const [locale, localeRecipients] of recipientsByLocale.entries()) {
       const preview = getPushMessagePreview(params.message.kind, params.message.text, locale);
+      const isSharedRoom = params.room.type !== 'direct';
       const title =
-        params.room.type === 'group'
+        isSharedRoom
           ? params.room.title?.trim() || params.message.senderName
           : params.message.senderName;
       const body =
-        params.room.type === 'group'
+        isSharedRoom
           ? `${params.message.senderName}: ${preview}`.trim()
           : preview;
 
@@ -2945,6 +2902,106 @@ export class SocialService {
     }
 
     return false;
+  }
+
+  private async createSharedRoom(
+    userId: string,
+    params: {
+      title: string;
+      memberUserIds: string[];
+    },
+    roomType: 'group' | 'family'
+  ): Promise<RoomDto> {
+    const title = params.title.trim();
+    if (title.length < 1 || title.length > 100) {
+      throw new AppError(
+        400,
+        ErrorCodes.VALIDATION_ERROR,
+        roomType === 'family' ? 'Family room title must be 1-100 characters.' : 'Group title must be 1-100 characters.'
+      );
+    }
+
+    const uniqMemberIds = Array.from(new Set([userId, ...params.memberUserIds]));
+    if (uniqMemberIds.length < 2) {
+      throw new AppError(
+        400,
+        ErrorCodes.VALIDATION_ERROR,
+        roomType === 'family' ? 'Family room requires at least 2 members.' : 'Group room requires at least 2 members.'
+      );
+    }
+
+    const existingUsers = await this.db.query<{ id: string }>(
+      `SELECT id
+       FROM users
+       WHERE id = ANY($1::uuid[])`,
+      [uniqMemberIds]
+    );
+
+    if (existingUsers.rows.length !== uniqMemberIds.length) {
+      throw new AppError(404, ErrorCodes.RESOURCE_NOT_FOUND, 'One or more users do not exist.');
+    }
+
+    if (roomType === 'family') {
+      const friendIds = new Set(await this.getFriendUserIds(userId));
+      const nonFriends = uniqMemberIds.filter((memberId) => memberId !== userId && !friendIds.has(memberId));
+      if (nonFriends.length > 0) {
+        throw new AppError(403, ErrorCodes.FORBIDDEN, 'Family room members must already be friends.');
+      }
+    }
+
+    const client = await this.db.connect();
+    let roomId = '';
+
+    try {
+      await client.query('BEGIN');
+
+      const roomResult = await client.query<{ id: string }>(
+        `INSERT INTO rooms (type, title, created_by, created_at, updated_at)
+         VALUES ($1, $2, $3, NOW(), NOW())
+         RETURNING id`,
+        [roomType, title, userId]
+      );
+
+      roomId = roomResult.rows[0].id;
+
+      for (const memberId of uniqMemberIds) {
+        await client.query(
+          `INSERT INTO room_members (room_id, user_id, role, joined_at, left_at)
+           VALUES ($1, $2, $3, NOW(), NULL)
+           ON CONFLICT (room_id, user_id)
+           DO UPDATE SET
+             left_at = NULL,
+             role = EXCLUDED.role`,
+          [roomId, memberId, memberId === userId ? 'admin' : 'member']
+        );
+
+        await client.query(
+          `INSERT INTO room_user_settings (room_id, user_id, favorite, muted, created_at, updated_at)
+           VALUES ($1, $2, FALSE, FALSE, NOW(), NOW())
+           ON CONFLICT (room_id, user_id)
+           DO UPDATE SET
+             hidden_at = NULL,
+             updated_at = NOW()`,
+          [roomId, memberId]
+        );
+      }
+
+      await client.query('COMMIT');
+    } catch (error) {
+      await client.query('ROLLBACK');
+      throw error;
+    } finally {
+      client.release();
+    }
+
+    this.emitToUsers(uniqMemberIds, {
+      event: 'room.updated',
+      data: {
+        roomId
+      }
+    });
+
+    return this.getRoomByIdForUser(userId, roomId);
   }
 
   private async createFriendshipPair(client: PoolClient, userAId: string, userBId: string): Promise<void> {

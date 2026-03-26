@@ -61,6 +61,7 @@ type FamilyRelationshipRow = {
 type LinkRow = {
   relationship_id: string;
   family_group_id: string | null;
+  family_room_id: string | null;
   relationship_type: FamilyRelationshipType;
   status: 'active' | 'blocked' | 'deleted';
   pair_key: string;
@@ -86,6 +87,7 @@ type PermissionRow = {
 
 type GroupRow = {
   family_group_id: string;
+  family_room_id: string | null;
   name: string | null;
   status: 'active' | 'archived';
   created_at: Date;
@@ -102,6 +104,33 @@ type GroupMemberRow = {
   custom_label: string | null;
   status: 'active' | 'invited' | 'removed';
   joined_at: Date;
+};
+
+type FamilyRoomSeedRow = {
+  room_id: string;
+  name: string | null;
+  status: 'active' | 'archived';
+  created_by: string | null;
+  created_at: Date;
+  updated_at: Date;
+};
+
+type FamilyRoomMemberSyncRow = {
+  user_id: string;
+  member_role: FamilyMemberRole;
+  display_label: FamilyLabel;
+  custom_label: string | null;
+  status: 'active' | 'invited' | 'removed';
+  joined_at: Date;
+};
+
+type FamilyRoomPermissionSyncRow = {
+  actor_user_id: string;
+  subject_user_id: string | null;
+  service_key: FamilyServiceKey;
+  permission_level: FamilyPermissionLevel;
+  created_at: Date;
+  updated_at: Date;
 };
 
 const UPGRADE_REQUEST_TTL_DAYS = 7;
@@ -125,6 +154,12 @@ function toMemberRole(label: FamilyLabel): FamilyMemberRole {
   if (label === 'child') return 'child';
   if (label === 'guardian') return 'guardian';
   return 'parent';
+}
+
+function toMembershipKind(memberRole: FamilyMemberRole): 'adult' | 'child' | 'guardian' {
+  if (memberRole === 'child') return 'child';
+  if (memberRole === 'guardian') return 'guardian';
+  return 'adult';
 }
 
 export class FamilyService {
@@ -306,6 +341,8 @@ export class FamilyService {
     relationshipId: string;
     relationshipType: FamilyRelationshipType;
     roomId: string;
+    directRoomId: string;
+    familyRoomId?: string;
     permissionsSeeded: false;
   }> {
     const client = await this.db.connect();
@@ -319,12 +356,13 @@ export class FamilyService {
       const familyGroupId = await this.resolveFamilyGroupId(client, request.requester_id, request.target_user_id);
       await this.upsertFamilyMembers(client, familyGroupId, request);
       const relationshipId = await this.upsertFamilyRelationship(client, familyGroupId, request);
-      const roomId = await this.ensureDirectRoomForUsers(
+      const directRoomId = await this.ensureDirectRoomForUsers(
         client,
         request.requester_id,
         request.target_user_id,
         request.requester_id
       );
+      const familyRoomId = await this.syncFamilyRoomFromLegacyGroup(client, familyGroupId, request.requester_id);
 
       await client.query(
         `UPDATE family_upgrade_requests
@@ -350,8 +388,14 @@ export class FamilyService {
       });
       this.emitToUsers([request.requester_id, request.target_user_id], {
         event: 'room.updated',
-        data: { roomId }
+        data: { roomId: directRoomId }
       });
+      if (familyRoomId) {
+        this.emitToUsers([request.requester_id, request.target_user_id], {
+          event: 'room.updated',
+          data: { roomId: familyRoomId }
+        });
+      }
 
       return {
         requestId: request.id,
@@ -359,7 +403,9 @@ export class FamilyService {
         familyGroupId,
         relationshipId,
         relationshipType: request.requested_relationship_type,
-        roomId,
+        roomId: directRoomId,
+        directRoomId,
+        ...(familyRoomId ? { familyRoomId } : {}),
         permissionsSeeded: false
       };
     } catch (error) {
@@ -424,7 +470,7 @@ export class FamilyService {
 
   async removeLink(
     userId: string,
-    relationshipId: string
+  relationshipId: string
   ): Promise<{ relationshipId: string; status: 'deleted'; peerUserId: string }> {
     const client = await this.db.connect();
     try {
@@ -462,6 +508,7 @@ export class FamilyService {
         [relationshipId, userId]
       );
 
+      let familyRoomId: string | null = null;
       if (row.family_group_id) {
         const memberIds = [row.user_a_id, row.user_b_id];
         for (const memberUserId of memberIds) {
@@ -505,6 +552,8 @@ export class FamilyService {
             [row.family_group_id]
           );
         }
+
+        familyRoomId = await this.syncFamilyRoomFromLegacyGroup(client, row.family_group_id, userId);
       }
 
       await client.query('COMMIT');
@@ -518,6 +567,12 @@ export class FamilyService {
         event: 'friend.updated',
         data: { type: 'family.removed', peerUserId }
       });
+      if (familyRoomId) {
+        this.emitToUsers([row.user_a_id, row.user_b_id], {
+          event: 'room.updated',
+          data: { roomId: familyRoomId }
+        });
+      }
 
       return {
         relationshipId,
@@ -536,6 +591,7 @@ export class FamilyService {
     Array<{
       relationshipId: string;
       familyGroupId: string;
+      familyRoomId?: string;
       relationshipType: FamilyRelationshipType;
       status: 'active' | 'blocked' | 'deleted';
       me: {
@@ -558,6 +614,7 @@ export class FamilyService {
     const result = await this.db.query<LinkRow>(
       `SELECT ur.id AS relationship_id,
               ur.family_group_id,
+              room_map.room_id AS family_room_id,
               ur.relationship_type,
               ur.status,
               ur.pair_key,
@@ -578,6 +635,8 @@ export class FamilyService {
               ON r.type = 'direct'
              AND r.direct_key = ur.pair_key
              AND r.deleted_at IS NULL
+       LEFT JOIN legacy_family_group_room_map room_map
+              ON room_map.family_group_id = ur.family_group_id
        LEFT JOIN family_group_members me_member
               ON me_member.family_group_id = ur.family_group_id
              AND me_member.user_id = $1
@@ -618,6 +677,7 @@ export class FamilyService {
         return {
           relationshipId: row.relationship_id,
           familyGroupId: row.family_group_id,
+          ...(row.family_room_id ? { familyRoomId: row.family_room_id } : {}),
           relationshipType: row.relationship_type,
           status: row.status,
           me: {
@@ -642,6 +702,7 @@ export class FamilyService {
   async getMyGroups(userId: string): Promise<{
     items: Array<{
       familyGroupId: string;
+      familyRoomId?: string;
       name?: string;
       status: 'active' | 'archived';
       createdAt: string;
@@ -658,9 +719,14 @@ export class FamilyService {
     }>;
   }> {
     const groups = await this.db.query<GroupRow>(
-      `SELECT fg.id AS family_group_id, fg.name, fg.status, fg.created_at
+      `SELECT fg.id AS family_group_id,
+              room_map.room_id AS family_room_id,
+              fg.name,
+              fg.status,
+              fg.created_at
        FROM family_group_members fgm
        INNER JOIN family_groups fg ON fg.id = fgm.family_group_id
+       LEFT JOIN legacy_family_group_room_map room_map ON room_map.family_group_id = fg.id
        WHERE fgm.user_id = $1
          AND fgm.status = 'active'
        ORDER BY fg.created_at DESC`,
@@ -698,6 +764,7 @@ export class FamilyService {
     return {
       items: groups.rows.map((group) => ({
         familyGroupId: group.family_group_id,
+        ...(group.family_room_id ? { familyRoomId: group.family_room_id } : {}),
         ...(group.name ? { name: group.name } : {}),
         status: group.status,
         createdAt: group.created_at.toISOString(),
@@ -1066,6 +1133,268 @@ export class FamilyService {
          updated_at = NOW()`,
       [roomId, userAId, userBId]
     );
+
+    return roomId;
+  }
+
+  private async ensureFamilyRoomForGroup(
+    client: PoolClient,
+    familyGroupId: string,
+    createdByHint?: string
+  ): Promise<string | null> {
+    const existing = await client.query<{ room_id: string }>(
+      `SELECT room_id
+       FROM legacy_family_group_room_map
+       WHERE family_group_id = $1
+       LIMIT 1`,
+      [familyGroupId]
+    );
+    if (existing.rows[0]?.room_id) {
+      return existing.rows[0].room_id;
+    }
+
+    const seed = await client.query<FamilyRoomSeedRow>(
+      `SELECT gen_random_uuid() AS room_id,
+              fg.name,
+              fg.status,
+              COALESCE(
+                fg.created_by,
+                active_member.user_id,
+                any_member.user_id,
+                rel.user_a_id,
+                rel.user_b_id,
+                $2::uuid
+              ) AS created_by,
+              fg.created_at,
+              fg.updated_at
+       FROM family_groups fg
+       LEFT JOIN LATERAL (
+         SELECT fgm.user_id
+         FROM family_group_members fgm
+         WHERE fgm.family_group_id = fg.id
+           AND fgm.status = 'active'
+         ORDER BY fgm.joined_at ASC, fgm.user_id ASC
+         LIMIT 1
+       ) AS active_member ON TRUE
+       LEFT JOIN LATERAL (
+         SELECT fgm.user_id
+         FROM family_group_members fgm
+         WHERE fgm.family_group_id = fg.id
+         ORDER BY fgm.joined_at ASC, fgm.user_id ASC
+         LIMIT 1
+       ) AS any_member ON TRUE
+       LEFT JOIN LATERAL (
+         SELECT ur.user_a_id, ur.user_b_id
+         FROM user_relationships ur
+         WHERE ur.family_group_id = fg.id
+           AND ur.relationship_type = 'parent_child'
+         ORDER BY ur.created_at ASC, ur.id ASC
+         LIMIT 1
+       ) AS rel ON TRUE
+       WHERE fg.id = $1
+       LIMIT 1`,
+      [familyGroupId, createdByHint ?? null]
+    );
+
+    const row = seed.rows[0];
+    if (!row || !row.created_by) {
+      return null;
+    }
+
+    const title = (row.name || '').trim() || 'Family';
+    await client.query(
+      `INSERT INTO rooms (id, type, direct_key, title, created_by, created_at, updated_at, deleted_at)
+       VALUES ($1, 'family', NULL, $2, $3, $4, $5, NULL)
+       ON CONFLICT (id) DO NOTHING`,
+      [row.room_id, title, row.created_by, row.created_at, row.updated_at]
+    );
+
+    await client.query(
+      `INSERT INTO legacy_family_group_room_map (family_group_id, room_id, created_at)
+       VALUES ($1, $2, NOW())
+       ON CONFLICT (family_group_id)
+       DO UPDATE SET
+         room_id = EXCLUDED.room_id`,
+      [familyGroupId, row.room_id]
+    );
+
+    return row.room_id;
+  }
+
+  private async syncFamilyRoomFromLegacyGroup(
+    client: PoolClient,
+    familyGroupId: string,
+    createdByHint?: string
+  ): Promise<string | null> {
+    const roomId = await this.ensureFamilyRoomForGroup(client, familyGroupId, createdByHint);
+    if (!roomId) {
+      return null;
+    }
+
+    const groupResult = await client.query<{ name: string | null; status: 'active' | 'archived' }>(
+      `SELECT name, status
+       FROM family_groups
+       WHERE id = $1
+       LIMIT 1`,
+      [familyGroupId]
+    );
+    const group = groupResult.rows[0];
+    if (!group) {
+      return roomId;
+    }
+
+    const membersResult = await client.query<FamilyRoomMemberSyncRow>(
+      `SELECT user_id,
+              member_role,
+              display_label,
+              custom_label,
+              status,
+              joined_at
+       FROM family_group_members
+       WHERE family_group_id = $1
+         AND status = 'active'
+       ORDER BY joined_at ASC, user_id ASC`,
+      [familyGroupId]
+    );
+
+    const activeMembers = membersResult.rows;
+    const activeMemberIds = activeMembers.map((member) => member.user_id);
+    const isActiveRoom = group.status === 'active' && activeMemberIds.length > 0;
+    const title = (group.name || '').trim() || 'Family';
+
+    await client.query(
+      `UPDATE rooms
+       SET title = $2,
+           deleted_at = CASE WHEN $3::boolean THEN NULL ELSE COALESCE(deleted_at, NOW()) END,
+           updated_at = NOW()
+       WHERE id = $1`,
+      [roomId, title, isActiveRoom]
+    );
+
+    if (!isActiveRoom) {
+      await client.query(
+        `UPDATE room_members
+         SET left_at = COALESCE(left_at, NOW())
+         WHERE room_id = $1
+           AND left_at IS NULL`,
+        [roomId]
+      );
+      await client.query(`DELETE FROM room_member_profiles WHERE room_id = $1`, [roomId]);
+      await client.query(`DELETE FROM room_features WHERE room_id = $1`, [roomId]);
+      await client.query(`DELETE FROM room_member_permissions WHERE room_id = $1`, [roomId]);
+      return roomId;
+    }
+
+    for (const member of activeMembers) {
+      await client.query(
+        `INSERT INTO room_members (room_id, user_id, role, joined_at, left_at)
+         VALUES ($1, $2, $3, $4, NULL)
+         ON CONFLICT (room_id, user_id)
+         DO UPDATE SET
+           role = EXCLUDED.role,
+           left_at = NULL`,
+        [roomId, member.user_id, member.member_role === 'child' ? 'member' : 'admin', member.joined_at]
+      );
+
+      await client.query(
+        `INSERT INTO room_user_settings (room_id, user_id, favorite, muted, created_at, updated_at)
+         VALUES ($1, $2, FALSE, FALSE, NOW(), NOW())
+         ON CONFLICT (room_id, user_id)
+         DO UPDATE SET
+           hidden_at = NULL,
+           updated_at = NOW()`,
+        [roomId, member.user_id]
+      );
+
+      await client.query(
+        `INSERT INTO room_member_profiles (room_id, user_id, alias, role_label, membership_kind, created_at, updated_at)
+         VALUES ($1, $2, $3, $4, $5, NOW(), NOW())
+         ON CONFLICT (room_id, user_id)
+         DO UPDATE SET
+           alias = EXCLUDED.alias,
+           role_label = EXCLUDED.role_label,
+           membership_kind = EXCLUDED.membership_kind,
+           updated_at = NOW()`,
+        [
+          roomId,
+          member.user_id,
+          (member.custom_label || '').trim() || null,
+          member.display_label,
+          toMembershipKind(member.member_role)
+        ]
+      );
+    }
+
+    await client.query(
+      `UPDATE room_members
+       SET left_at = COALESCE(left_at, NOW())
+       WHERE room_id = $1
+         AND left_at IS NULL
+         AND user_id <> ALL($2::uuid[])`,
+      [roomId, activeMemberIds]
+    );
+
+    await client.query(
+      `DELETE FROM room_member_profiles
+       WHERE room_id = $1
+         AND user_id <> ALL($2::uuid[])`,
+      [roomId, activeMemberIds]
+    );
+
+    await client.query(`DELETE FROM room_features WHERE room_id = $1`, [roomId]);
+    await client.query(`DELETE FROM room_member_permissions WHERE room_id = $1`, [roomId]);
+
+    const permissionRows = await client.query<FamilyRoomPermissionSyncRow>(
+      `SELECT actor_user_id,
+              subject_user_id,
+              service_key,
+              permission_level,
+              created_at,
+              updated_at
+       FROM family_service_permissions
+       WHERE family_group_id = $1
+       ORDER BY created_at ASC, actor_user_id ASC`,
+      [familyGroupId]
+    );
+
+    const featureKeys = new Set<FamilyServiceKey>();
+    for (const permission of permissionRows.rows) {
+      featureKeys.add(permission.service_key);
+      await client.query(
+        `INSERT INTO room_member_permissions (
+           room_id,
+           actor_user_id,
+           subject_user_id,
+           permission_key,
+           permission_level,
+           created_at,
+           updated_at
+         )
+         VALUES ($1, $2, $3, $4, $5, $6, $7)
+         ON CONFLICT DO NOTHING`,
+        [
+          roomId,
+          permission.actor_user_id,
+          permission.subject_user_id,
+          permission.service_key,
+          permission.permission_level,
+          permission.created_at,
+          permission.updated_at
+        ]
+      );
+    }
+
+    for (const featureKey of featureKeys) {
+      await client.query(
+        `INSERT INTO room_features (room_id, feature_key, enabled, created_at, updated_at)
+         VALUES ($1, $2, TRUE, NOW(), NOW())
+         ON CONFLICT (room_id, feature_key)
+         DO UPDATE SET
+           enabled = TRUE,
+           updated_at = NOW()`,
+        [roomId, featureKey]
+      );
+    }
 
     return roomId;
   }

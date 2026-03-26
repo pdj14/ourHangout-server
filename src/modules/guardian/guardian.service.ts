@@ -356,7 +356,7 @@ export class GuardianService {
         this.db.query<SummaryRoomsRow>(
           `SELECT COUNT(*)::int AS total_rooms,
                   COUNT(*) FILTER (WHERE type = 'direct')::int AS direct_rooms,
-                  COUNT(*) FILTER (WHERE type = 'group')::int AS group_rooms
+                  COUNT(*) FILTER (WHERE type IN ('group', 'family'))::int AS group_rooms
            FROM rooms
            WHERE deleted_at IS NULL`
         ),
@@ -894,9 +894,11 @@ export class GuardianService {
       items: result.rows.map((row) => {
         const members = membersByRoom.get(row.id) ?? [];
         const title =
-          row.type === 'group'
-            ? row.title?.trim() || 'Group room'
-            : members.map((member) => member.name).join(' x ') || 'Direct room';
+          row.type === 'direct'
+            ? members.map((member) => member.name).join(' x ') || 'Direct room'
+            : row.type === 'family'
+              ? row.title?.trim() || 'Family room'
+              : row.title?.trim() || 'Group room';
 
         const preview = normalizeMessagePreview(row.last_message_kind, row.last_message_text);
 

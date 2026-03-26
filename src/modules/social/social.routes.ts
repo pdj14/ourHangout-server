@@ -303,6 +303,7 @@ export async function socialRoutes(app: FastifyInstance): Promise<void> {
         querystring: {
           type: 'object',
           properties: {
+            type: { type: 'string', enum: ['direct', 'group', 'family'] },
             limit: { type: 'number', minimum: 1, maximum: 100 },
             cursor: { type: 'string' }
           }
@@ -310,12 +311,41 @@ export async function socialRoutes(app: FastifyInstance): Promise<void> {
       }
     },
     async (request) => {
-      const query = (request.query as { limit?: number; cursor?: string } | undefined) ?? {};
+      const query = (request.query as { type?: 'direct' | 'group' | 'family'; limit?: number; cursor?: string } | undefined) ?? {};
       const data = await app.socialService.listRooms({
         userId: request.user.sub,
+        type: query.type,
         limit: query.limit,
         cursor: query.cursor
       });
+      return { success: true, data };
+    }
+  );
+
+  app.post(
+    '/rooms',
+    {
+      preHandler: app.authenticate,
+      schema: {
+        tags: ['social'],
+        summary: 'Create shared room',
+        body: {
+          type: 'object',
+          required: ['type', 'title', 'memberUserIds'],
+          properties: {
+            type: { type: 'string', enum: ['group', 'family'] },
+            title: { type: 'string', minLength: 1, maxLength: 100 },
+            memberUserIds: {
+              type: 'array',
+              items: { type: 'string', format: 'uuid' }
+            }
+          }
+        }
+      }
+    },
+    async (request) => {
+      const body = request.body as { type: 'group' | 'family'; title: string; memberUserIds: string[] };
+      const data = await app.socialService.createRoom(request.user.sub, body);
       return { success: true, data };
     }
   );
@@ -367,6 +397,34 @@ export async function socialRoutes(app: FastifyInstance): Promise<void> {
     async (request) => {
       const body = request.body as { title: string; memberUserIds: string[] };
       const data = await app.socialService.createGroupRoom(request.user.sub, body);
+      return { success: true, data };
+    }
+  );
+
+  app.post(
+    '/rooms/family',
+    {
+      preHandler: app.authenticate,
+      schema: {
+        tags: ['social'],
+        summary: 'Create family room',
+        body: {
+          type: 'object',
+          required: ['title', 'memberUserIds'],
+          properties: {
+            title: { type: 'string', minLength: 1, maxLength: 100 },
+            memberUserIds: {
+              type: 'array',
+              minItems: 1,
+              items: { type: 'string', format: 'uuid' }
+            }
+          }
+        }
+      }
+    },
+    async (request) => {
+      const body = request.body as { title: string; memberUserIds: string[] };
+      const data = await app.socialService.createFamilyRoom(request.user.sub, body);
       return { success: true, data };
     }
   );

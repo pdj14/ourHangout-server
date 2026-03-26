@@ -1,6 +1,6 @@
 export type MessageKind = 'text' | 'image' | 'video' | 'system';
 export type MessageDelivery = 'sent' | 'delivered' | 'read';
-export type RoomType = 'direct' | 'group';
+export type RoomType = 'direct' | 'group' | 'family';
 
 export interface UserProfileDto {
   id: string;
@@ -31,6 +31,7 @@ export interface FriendDto {
 
 export interface RoomDto {
   id: string;
+  type: RoomType;
   title: string;
   members: string[];
   isGroup: boolean;
