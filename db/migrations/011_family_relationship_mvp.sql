@@ -36,6 +36,7 @@ CREATE TABLE IF NOT EXISTS family_group_members (
     CHECK (member_role IN ('parent', 'child', 'guardian')),
   display_label TEXT NOT NULL
     CHECK (display_label IN ('mother', 'father', 'guardian', 'child')),
+  custom_label TEXT,
   status TEXT NOT NULL DEFAULT 'active'
     CHECK (status IN ('active', 'invited', 'removed')),
   joined_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),

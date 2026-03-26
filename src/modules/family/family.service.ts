@@ -99,6 +99,7 @@ type GroupMemberRow = {
   avatar_url: string | null;
   member_role: FamilyMemberRole;
   display_label: FamilyLabel;
+  custom_label: string | null;
   status: 'active' | 'invited' | 'removed';
   joined_at: Date;
 };
@@ -601,6 +602,7 @@ export class FamilyService {
         avatarUri?: string;
         memberRole: FamilyMemberRole;
         displayLabel: FamilyLabel;
+        customLabel?: string;
         status: 'active' | 'invited' | 'removed';
         joinedAt: string;
       }>;
@@ -627,6 +629,7 @@ export class FamilyService {
               u.avatar_url,
               fgm.member_role,
               fgm.display_label,
+              fgm.custom_label,
               fgm.status,
               fgm.joined_at
        FROM family_group_members fgm
@@ -655,6 +658,7 @@ export class FamilyService {
           ...(member.avatar_url ? { avatarUri: member.avatar_url } : {}),
           memberRole: member.member_role,
           displayLabel: member.display_label,
+          ...(member.custom_label ? { customLabel: member.custom_label } : {}),
           status: member.status,
           joinedAt: member.joined_at.toISOString()
         }))
