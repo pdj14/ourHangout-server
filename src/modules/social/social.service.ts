@@ -744,7 +744,7 @@ export class SocialService {
     const items = rows.map((row) => {
       const profileName = normalizeName(row.friend_name, row.friend_email);
       const family = familyByPeer.get(row.friend_user_id);
-      const familyLabel = (family?.custom_label || family?.display_label || '').trim();
+      const familyLabel = (family?.custom_label || '').trim();
       const aliasName = aliasesByTarget.get(row.friend_user_id) || familyLabel;
       return {
         id: row.friend_user_id,
