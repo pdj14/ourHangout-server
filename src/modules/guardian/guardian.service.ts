@@ -6,6 +6,7 @@ import type { Pool } from 'pg';
 import { env } from '../../config/env';
 import { AppError, ErrorCodes } from '../../lib/errors';
 import { normalizePhoneE164 } from '../../lib/phone';
+import type { ConnectionManager } from '../chat/connection-manager';
 import { GUARDIAN_CONSOLE_SUB } from './guardian.auth';
 import type { MessageDelivery, MessageKind, RoomType } from '../social/social.types';
 
@@ -72,6 +73,19 @@ type GuardianUserRow = {
   message_count: number;
   storage_bytes: string | number;
   family_link_count: number;
+  location_sharing_enabled: boolean;
+  location_captured_at: Date | null;
+};
+
+type GuardianUserLocationRow = {
+  user_id: string;
+  email: string;
+  display_name: string | null;
+  latitude: number;
+  longitude: number;
+  accuracy_m: number | null;
+  captured_at: Date;
+  source: 'heartbeat' | 'precision_refresh' | 'manual_refresh';
 };
 
 type FamilyLinkRow = {
@@ -295,6 +309,7 @@ async function collectStorageFiles(root: string, current = root): Promise<Storag
 export class GuardianService {
   constructor(
     private readonly db: Pool,
+    private readonly connectionManager: ConnectionManager,
     private readonly logger: FastifyBaseLogger
   ) {}
 
@@ -474,6 +489,8 @@ export class GuardianService {
       statusMessage?: string;
       phoneE164?: string;
       locale?: string;
+      locationSharingEnabled: boolean;
+      latestLocationAt?: string;
       roomCount: number;
       messageCount: number;
       storageBytes: number;
@@ -516,11 +533,15 @@ export class GuardianService {
               u.locale,
               u.created_at,
               u.updated_at,
+              COALESCE(location_settings.sharing_enabled, FALSE) AS location_sharing_enabled,
+              location_latest.captured_at AS location_captured_at,
               COALESCE(room_stats.room_count, 0)::int AS room_count,
               COALESCE(message_stats.message_count, 0)::int AS message_count,
               COALESCE(asset_stats.storage_bytes, 0)::bigint AS storage_bytes,
               COALESCE(link_stats.family_link_count, 0)::int AS family_link_count
        FROM users u
+       LEFT JOIN user_location_settings location_settings ON location_settings.user_id = u.id
+       LEFT JOIN user_location_latest location_latest ON location_latest.user_id = u.id
        LEFT JOIN (
          SELECT mem.user_id,
                 COUNT(DISTINCT mem.room_id)::int AS room_count
@@ -575,6 +596,8 @@ export class GuardianService {
         ...(row.status_message ? { statusMessage: row.status_message } : {}),
         ...(row.phone_e164 ? { phoneE164: row.phone_e164 } : {}),
         ...(row.locale ? { locale: row.locale } : {}),
+        locationSharingEnabled: !!row.location_sharing_enabled,
+        ...(row.location_captured_at ? { latestLocationAt: row.location_captured_at.toISOString() } : {}),
         roomCount: row.room_count,
         messageCount: row.message_count,
         storageBytes: toNumber(row.storage_bytes),
@@ -700,6 +723,129 @@ export class GuardianService {
 
       throw error;
     }
+  }
+
+  async getUserLocation(
+    requesterUserId: string,
+    targetUserId: string
+  ): Promise<{
+    sharingEnabled: boolean;
+    location?: {
+      userId: string;
+      name: string;
+      latitude: number;
+      longitude: number;
+      accuracyM?: number;
+      capturedAt: string;
+      source: 'heartbeat' | 'precision_refresh' | 'manual_refresh';
+    };
+  }> {
+    await this.assertParentRole(requesterUserId);
+
+    const settings = await this.db.query<{ sharing_enabled: boolean }>(
+      `SELECT sharing_enabled
+       FROM user_location_settings
+       WHERE user_id = $1
+       LIMIT 1`,
+      [targetUserId]
+    );
+
+    const sharingEnabled = !!settings.rows[0]?.sharing_enabled;
+    if (!sharingEnabled) {
+      return { sharingEnabled: false };
+    }
+
+    const result = await this.db.query<GuardianUserLocationRow>(
+      `SELECT latest.user_id,
+              u.email,
+              u.display_name,
+              latest.latitude,
+              latest.longitude,
+              latest.accuracy_m,
+              latest.captured_at,
+              latest.source
+       FROM user_location_latest latest
+       INNER JOIN users u ON u.id = latest.user_id
+       WHERE latest.user_id = $1
+       LIMIT 1`,
+      [targetUserId]
+    );
+
+    const row = result.rows[0];
+    return {
+      sharingEnabled: true,
+      ...(row
+        ? {
+            location: {
+              userId: row.user_id,
+              name: normalizeName(row.display_name, row.email),
+              latitude: row.latitude,
+              longitude: row.longitude,
+              ...(typeof row.accuracy_m === 'number' ? { accuracyM: row.accuracy_m } : {}),
+              capturedAt: row.captured_at.toISOString(),
+              source: row.source
+            }
+          }
+        : {})
+    };
+  }
+
+  async requestUserLocationRefresh(
+    requesterUserId: string,
+    targetUserId: string
+  ): Promise<{ pending: true; expiresAt: string }> {
+    await this.assertParentRole(requesterUserId);
+
+    const settings = await this.db.query<{ sharing_enabled: boolean }>(
+      `SELECT sharing_enabled
+       FROM user_location_settings
+       WHERE user_id = $1
+       LIMIT 1`,
+      [targetUserId]
+    );
+
+    if (!(settings.rows[0]?.sharing_enabled ?? false)) {
+      throw new AppError(409, ErrorCodes.CONFLICT, 'Location sharing is disabled for this account.');
+    }
+
+    const expiresAt = new Date(Date.now() + 3 * 60 * 1000);
+    await this.db.query(
+      `INSERT INTO user_location_precision_requests (
+         user_id,
+         requested_by_user_id,
+         requested_by_kind,
+         room_id,
+         requested_at,
+         expires_at,
+         consumed_at,
+         created_at,
+         updated_at
+       )
+       VALUES ($1, NULL, 'guardian_console', NULL, NOW(), $2, NULL, NOW(), NOW())
+       ON CONFLICT (user_id)
+       DO UPDATE SET
+         requested_by_user_id = NULL,
+         requested_by_kind = 'guardian_console',
+         room_id = NULL,
+         requested_at = NOW(),
+         expires_at = EXCLUDED.expires_at,
+         consumed_at = NULL,
+         updated_at = NOW()`,
+      [targetUserId, expiresAt]
+    );
+
+    this.connectionManager.sendToUser(targetUserId, {
+      event: 'location.precision.requested',
+      data: {
+        requestedAt: new Date().toISOString(),
+        expiresAt: expiresAt.toISOString()
+      }
+    });
+
+    return {
+      pending: true,
+      expiresAt: expiresAt.toISOString()
+    };
   }
 
   async revokeUserSessions(requesterUserId: string, targetUserId: string): Promise<{ revoked: boolean }> {

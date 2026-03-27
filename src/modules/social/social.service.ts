@@ -18,6 +18,8 @@ import type {
   RoomDto,
   RoomMessageDto,
   RoomType,
+  UserLocationDto,
+  UserLocationRefreshRequestDto,
   UserProfileDto
 } from './social.types';
 
@@ -34,6 +36,7 @@ type UserProfileRow = {
   status_message: string | null;
   avatar_url: string | null;
   locale: string | null;
+  location_sharing_enabled?: boolean | null;
 };
 
 type FriendRow = {
@@ -197,6 +200,37 @@ type MediaAssetRow = {
   file_url: string;
   mime_type: string;
   size_bytes: number;
+};
+
+type UserLocationLatestRow = {
+  user_id: string;
+  latitude: number;
+  longitude: number;
+  accuracy_m: number | null;
+  captured_at: Date;
+  source: 'heartbeat' | 'precision_refresh' | 'manual_refresh';
+};
+
+type UserLocationPrecisionRequestRow = {
+  user_id: string;
+  requested_by_user_id: string | null;
+  requested_by_kind: 'guardian_app' | 'guardian_console';
+  room_id: string | null;
+  requested_at: Date;
+  expires_at: Date;
+  consumed_at: Date | null;
+};
+
+type FamilyRoomLocationRow = {
+  user_id: string;
+  display_name: string | null;
+  email: string;
+  avatar_url: string | null;
+  latitude: number;
+  longitude: number;
+  accuracy_m: number | null;
+  captured_at: Date;
+  source: 'heartbeat' | 'precision_refresh' | 'manual_refresh';
 };
 
 type SocialServiceDeps = {
@@ -426,14 +460,16 @@ export class SocialService {
       status?: string;
       avatarUri?: string;
       locale?: string;
+      locationSharingEnabled?: boolean;
     }
   ): Promise<UserProfileDto> {
     const hasName = input.name !== undefined;
     const hasStatus = input.status !== undefined;
     const hasAvatar = input.avatarUri !== undefined;
     const hasLocale = input.locale !== undefined;
+    const hasLocationSharing = input.locationSharingEnabled !== undefined;
 
-    if (!hasName && !hasStatus && !hasAvatar && !hasLocale) {
+    if (!hasName && !hasStatus && !hasAvatar && !hasLocale && !hasLocationSharing) {
       return this.getMeProfile(userId);
     }
 
@@ -470,7 +506,202 @@ export class SocialService {
       });
     }
 
+    if (hasLocationSharing) {
+      await this.upsertUserLocationSettings(userId, !!input.locationSharingEnabled);
+      if (!input.locationSharingEnabled) {
+        await this.db.query(`DELETE FROM user_location_latest WHERE user_id = $1`, [userId]);
+        await this.db.query(`DELETE FROM user_location_precision_requests WHERE user_id = $1`, [userId]);
+      }
+    }
+
     return this.mapProfile(row);
+  }
+
+  async updateMyLocation(params: {
+    userId: string;
+    latitude: number;
+    longitude: number;
+    accuracyM?: number | null;
+    capturedAt?: string;
+    source: 'heartbeat' | 'precision_refresh' | 'manual_refresh';
+  }): Promise<UserLocationDto> {
+    const settings = await this.getUserLocationSettings(params.userId);
+    if (!settings.sharingEnabled) {
+      throw new AppError(409, ErrorCodes.CONFLICT, 'Location sharing is disabled for this account.');
+    }
+
+    if (!Number.isFinite(params.latitude) || !Number.isFinite(params.longitude)) {
+      throw new AppError(400, ErrorCodes.VALIDATION_ERROR, 'Latitude and longitude are required.');
+    }
+    if (params.latitude < -90 || params.latitude > 90 || params.longitude < -180 || params.longitude > 180) {
+      throw new AppError(400, ErrorCodes.VALIDATION_ERROR, 'Latitude or longitude is out of range.');
+    }
+
+    const capturedAt = params.capturedAt ? new Date(params.capturedAt) : new Date();
+    if (Number.isNaN(capturedAt.getTime())) {
+      throw new AppError(400, ErrorCodes.VALIDATION_ERROR, 'capturedAt is invalid.');
+    }
+
+    const result = await this.db.query<UserLocationLatestRow>(
+      `INSERT INTO user_location_latest (
+         user_id,
+         latitude,
+         longitude,
+         accuracy_m,
+         captured_at,
+         source,
+         created_at,
+         updated_at
+       )
+       VALUES ($1, $2, $3, $4, $5, $6, NOW(), NOW())
+       ON CONFLICT (user_id)
+       DO UPDATE SET
+         latitude = EXCLUDED.latitude,
+         longitude = EXCLUDED.longitude,
+         accuracy_m = EXCLUDED.accuracy_m,
+         captured_at = EXCLUDED.captured_at,
+         source = EXCLUDED.source,
+         updated_at = NOW()
+       RETURNING user_id, latitude, longitude, accuracy_m, captured_at, source`,
+      [
+        params.userId,
+        params.latitude,
+        params.longitude,
+        params.accuracyM ?? null,
+        capturedAt,
+        params.source
+      ]
+    );
+
+    if (params.source === 'precision_refresh' || params.source === 'manual_refresh') {
+      await this.db.query(
+        `UPDATE user_location_precision_requests
+         SET consumed_at = NOW(),
+             updated_at = NOW()
+         WHERE user_id = $1
+           AND consumed_at IS NULL`,
+        [params.userId]
+      );
+    }
+
+    return this.mapUserLocation(result.rows[0]);
+  }
+
+  async getMyLocationRefreshRequest(userId: string): Promise<UserLocationRefreshRequestDto> {
+    const row = await this.getPendingLocationPrecisionRequest(userId);
+    if (!row) {
+      return { pending: false };
+    }
+    return {
+      pending: true,
+      requestId: row.user_id,
+      requestedAt: row.requested_at.toISOString(),
+      expiresAt: row.expires_at.toISOString()
+    };
+  }
+
+  async listFamilyRoomLocations(params: {
+    userId: string;
+    roomId: string;
+  }): Promise<{ items: Array<UserLocationDto & { name: string; avatarUri?: string }> }> {
+    const membership = await this.getRoomMembership(params.roomId, params.userId);
+    this.assertFamilyRoom(membership);
+
+    const result = await this.db.query<FamilyRoomLocationRow>(
+      `SELECT latest.user_id,
+              u.display_name,
+              u.email,
+              u.avatar_url,
+              latest.latitude,
+              latest.longitude,
+              latest.accuracy_m,
+              latest.captured_at,
+              latest.source
+       FROM room_relationships rr
+       INNER JOIN user_location_settings settings
+               ON settings.user_id = rr.child_user_id
+              AND settings.sharing_enabled = TRUE
+       INNER JOIN user_location_latest latest
+               ON latest.user_id = rr.child_user_id
+       INNER JOIN users u ON u.id = rr.child_user_id
+       WHERE rr.room_id = $1
+         AND rr.relationship_type = 'guardian_child'
+         AND rr.status = 'active'
+         AND rr.guardian_user_id = $2
+       ORDER BY latest.captured_at DESC`,
+      [params.roomId, params.userId]
+    );
+
+    return {
+      items: result.rows.map((row) => ({
+        ...this.mapUserLocation({
+          user_id: row.user_id,
+          latitude: row.latitude,
+          longitude: row.longitude,
+          accuracy_m: row.accuracy_m,
+          captured_at: row.captured_at,
+          source: row.source
+        }),
+        name: normalizeName(row.display_name, row.email),
+        ...(row.avatar_url ? { avatarUri: row.avatar_url } : {})
+      }))
+    };
+  }
+
+  async requestFamilyRoomLocationRefresh(params: {
+    userId: string;
+    roomId: string;
+    targetUserId: string;
+  }): Promise<UserLocationRefreshRequestDto> {
+    const membership = await this.getRoomMembership(params.roomId, params.userId);
+    this.assertFamilyRoom(membership);
+
+    const targetUserId = params.targetUserId.trim();
+    if (!targetUserId) {
+      throw new AppError(400, ErrorCodes.VALIDATION_ERROR, 'Target user id is required.');
+    }
+
+    const allowed = await this.db.query<{ exists: boolean }>(
+      `SELECT EXISTS(
+         SELECT 1
+         FROM room_relationships rr
+         INNER JOIN user_location_settings settings
+                 ON settings.user_id = rr.child_user_id
+                AND settings.sharing_enabled = TRUE
+         WHERE rr.room_id = $1
+           AND rr.relationship_type = 'guardian_child'
+           AND rr.status = 'active'
+           AND rr.guardian_user_id = $2
+           AND rr.child_user_id = $3
+       ) AS exists`,
+      [params.roomId, params.userId, targetUserId]
+    );
+
+    if (!(allowed.rows[0]?.exists ?? false)) {
+      throw new AppError(403, ErrorCodes.FORBIDDEN, 'You do not have access to request this member location.');
+    }
+
+    const request = await this.upsertLocationPrecisionRequest({
+      userId: targetUserId,
+      requestedByKind: 'guardian_app',
+      requestedByUserId: params.userId,
+      roomId: params.roomId
+    });
+
+    this.connectionManager.sendToUser(targetUserId, {
+      event: 'location.precision.requested',
+      data: {
+        requestedAt: request.requested_at.toISOString(),
+        expiresAt: request.expires_at.toISOString()
+      }
+    });
+
+    return {
+      pending: true,
+      requestId: request.user_id,
+      requestedAt: request.requested_at.toISOString(),
+      expiresAt: request.expires_at.toISOString()
+    };
   }
 
   async issueAvatarUploadUrl(
@@ -3483,9 +3714,16 @@ export class SocialService {
 
   private async getUserProfileRow(userId: string): Promise<UserProfileRow> {
     const result = await this.db.query<UserProfileRow>(
-      `SELECT id, email, display_name, status_message, avatar_url, locale
-       FROM users
-       WHERE id = $1
+      `SELECT u.id,
+              u.email,
+              u.display_name,
+              u.status_message,
+              u.avatar_url,
+              u.locale,
+              settings.sharing_enabled AS location_sharing_enabled
+       FROM users u
+       LEFT JOIN user_location_settings settings ON settings.user_id = u.id
+       WHERE u.id = $1
        LIMIT 1`,
       [userId]
     );
@@ -3549,7 +3787,101 @@ export class SocialService {
       ...(row.status_message ? { status: row.status_message } : {}),
       email: row.email,
       ...(row.avatar_url ? { avatarUri: row.avatar_url } : {}),
-      locale: normalizeLocaleTag(row.locale)
+      locale: normalizeLocaleTag(row.locale),
+      locationSharingEnabled: !!row.location_sharing_enabled
+    };
+  }
+
+  private async getUserLocationSettings(userId: string): Promise<{ sharingEnabled: boolean }> {
+    const result = await this.db.query<{ sharing_enabled: boolean }>(
+      `SELECT sharing_enabled
+       FROM user_location_settings
+       WHERE user_id = $1
+       LIMIT 1`,
+      [userId]
+    );
+
+    return {
+      sharingEnabled: !!result.rows[0]?.sharing_enabled
+    };
+  }
+
+  private async upsertUserLocationSettings(userId: string, sharingEnabled: boolean): Promise<void> {
+    await this.db.query(
+      `INSERT INTO user_location_settings (user_id, sharing_enabled, created_at, updated_at)
+       VALUES ($1, $2, NOW(), NOW())
+       ON CONFLICT (user_id)
+       DO UPDATE SET
+         sharing_enabled = EXCLUDED.sharing_enabled,
+         updated_at = NOW()`,
+      [userId, sharingEnabled]
+    );
+  }
+
+  private async getPendingLocationPrecisionRequest(userId: string): Promise<UserLocationPrecisionRequestRow | null> {
+    const result = await this.db.query<UserLocationPrecisionRequestRow>(
+      `SELECT user_id,
+              requested_by_user_id,
+              requested_by_kind,
+              room_id,
+              requested_at,
+              expires_at,
+              consumed_at
+       FROM user_location_precision_requests
+       WHERE user_id = $1
+         AND consumed_at IS NULL
+         AND expires_at > NOW()
+       LIMIT 1`,
+      [userId]
+    );
+
+    return result.rows[0] ?? null;
+  }
+
+  private async upsertLocationPrecisionRequest(params: {
+    userId: string;
+    requestedByKind: 'guardian_app' | 'guardian_console';
+    requestedByUserId?: string | null;
+    roomId?: string | null;
+  }): Promise<UserLocationPrecisionRequestRow> {
+    const expiresAt = new Date(Date.now() + 3 * 60 * 1000);
+    const result = await this.db.query<UserLocationPrecisionRequestRow>(
+      `INSERT INTO user_location_precision_requests (
+         user_id,
+         requested_by_user_id,
+         requested_by_kind,
+         room_id,
+         requested_at,
+         expires_at,
+         consumed_at,
+         created_at,
+         updated_at
+       )
+       VALUES ($1, $2, $3, $4, NOW(), $5, NULL, NOW(), NOW())
+       ON CONFLICT (user_id)
+       DO UPDATE SET
+         requested_by_user_id = EXCLUDED.requested_by_user_id,
+         requested_by_kind = EXCLUDED.requested_by_kind,
+         room_id = EXCLUDED.room_id,
+         requested_at = NOW(),
+         expires_at = EXCLUDED.expires_at,
+         consumed_at = NULL,
+         updated_at = NOW()
+       RETURNING user_id, requested_by_user_id, requested_by_kind, room_id, requested_at, expires_at, consumed_at`,
+      [params.userId, params.requestedByUserId ?? null, params.requestedByKind, params.roomId ?? null, expiresAt]
+    );
+
+    return result.rows[0];
+  }
+
+  private mapUserLocation(row: UserLocationLatestRow): UserLocationDto {
+    return {
+      userId: row.user_id,
+      latitude: row.latitude,
+      longitude: row.longitude,
+      ...(typeof row.accuracy_m === 'number' ? { accuracyM: row.accuracy_m } : {}),
+      capturedAt: row.captured_at.toISOString(),
+      source: row.source
     };
   }
 

@@ -34,14 +34,76 @@ export async function socialRoutes(app: FastifyInstance): Promise<void> {
             name: { type: 'string', minLength: 1, maxLength: 100 },
             status: { type: 'string', maxLength: 200 },
             avatarUri: { type: 'string', maxLength: 1024 },
-            locale: { type: 'string', minLength: 2, maxLength: 16 }
+            locale: { type: 'string', minLength: 2, maxLength: 16 },
+            locationSharingEnabled: { type: 'boolean' }
           }
         }
       }
     },
     async (request) => {
-      const body = (request.body as { name?: string; status?: string; avatarUri?: string; locale?: string } | undefined) ?? {};
+      const body = (request.body as {
+        name?: string;
+        status?: string;
+        avatarUri?: string;
+        locale?: string;
+        locationSharingEnabled?: boolean;
+      } | undefined) ?? {};
       const data = await app.socialService.updateMeProfile(request.user.sub, body);
+      return { success: true, data };
+    }
+  );
+
+  app.post(
+    '/me/location',
+    {
+      preHandler: app.authenticate,
+      schema: {
+        tags: ['social'],
+        summary: 'Update latest shared location for current user',
+        body: {
+          type: 'object',
+          required: ['latitude', 'longitude', 'source'],
+          properties: {
+            latitude: { type: 'number' },
+            longitude: { type: 'number' },
+            accuracyM: { type: 'number', minimum: 0 },
+            capturedAt: { type: 'string' },
+            source: { type: 'string', enum: ['heartbeat', 'precision_refresh', 'manual_refresh'] }
+          }
+        }
+      }
+    },
+    async (request) => {
+      const body = request.body as {
+        latitude: number;
+        longitude: number;
+        accuracyM?: number;
+        capturedAt?: string;
+        source: 'heartbeat' | 'precision_refresh' | 'manual_refresh';
+      };
+      const data = await app.socialService.updateMyLocation({
+        userId: request.user.sub,
+        latitude: body.latitude,
+        longitude: body.longitude,
+        accuracyM: body.accuracyM,
+        capturedAt: body.capturedAt,
+        source: body.source
+      });
+      return { success: true, data };
+    }
+  );
+
+  app.get(
+    '/me/location/refresh-request',
+    {
+      preHandler: app.authenticate,
+      schema: {
+        tags: ['social'],
+        summary: 'Get current pending precise location refresh request'
+      }
+    },
+    async (request) => {
+      const data = await app.socialService.getMyLocationRefreshRequest(request.user.sub);
       return { success: true, data };
     }
   );
@@ -909,6 +971,60 @@ export async function socialRoutes(app: FastifyInstance): Promise<void> {
         roomId: params.roomId,
         limit: query.limit,
         cursor: query.cursor
+      });
+      return { success: true, data };
+    }
+  );
+
+  app.get(
+    '/rooms/:roomId/locations',
+    {
+      preHandler: app.authenticate,
+      schema: {
+        tags: ['social'],
+        summary: 'List latest shared child locations visible to current guardian in a family room',
+        params: {
+          type: 'object',
+          required: ['roomId'],
+          properties: {
+            roomId: { type: 'string', format: 'uuid' }
+          }
+        }
+      }
+    },
+    async (request) => {
+      const params = request.params as { roomId: string };
+      const data = await app.socialService.listFamilyRoomLocations({
+        userId: request.user.sub,
+        roomId: params.roomId
+      });
+      return { success: true, data };
+    }
+  );
+
+  app.post(
+    '/rooms/:roomId/locations/:targetUserId/refresh',
+    {
+      preHandler: app.authenticate,
+      schema: {
+        tags: ['social'],
+        summary: 'Request one-time precise location refresh for a visible child in family room',
+        params: {
+          type: 'object',
+          required: ['roomId', 'targetUserId'],
+          properties: {
+            roomId: { type: 'string', format: 'uuid' },
+            targetUserId: { type: 'string', format: 'uuid' }
+          }
+        }
+      }
+    },
+    async (request) => {
+      const params = request.params as { roomId: string; targetUserId: string };
+      const data = await app.socialService.requestFamilyRoomLocationRefresh({
+        userId: request.user.sub,
+        roomId: params.roomId,
+        targetUserId: params.targetUserId
       });
       return { success: true, data };
     }
