@@ -89,6 +89,16 @@ const COPY = {
     no_users_matched: '조건에 맞는 사용자가 없습니다.',
     no_phone: '전화번호 없음',
     no_status: '상태 메시지 없음',
+    location_sharing_on: '위치 공유 ON',
+    location_sharing_off: '위치 공유 OFF',
+    latest_location_at: '최근 위치 {time}',
+    no_location_yet: '아직 위치 기록이 없어요.',
+    view_location: '위치 보기',
+    precise_refresh: '정확히 새로고침',
+    open_map: '지도 열기',
+    flash_location_disabled: '이 계정은 위치 공유가 꺼져 있어요.',
+    flash_location_missing: '아직 저장된 위치가 없어요.',
+    flash_precise_refresh_requested: '정확한 위치 새로고침을 요청했어요. 만료 시각: {time}',
     edit: '수정',
     revoke_sessions: '세션 종료',
     rooms_count: '{count}개 방',
@@ -290,6 +300,16 @@ const COPY = {
     no_users_matched: 'No users matched this filter.',
     no_phone: 'No phone set',
     no_status: 'No status message',
+    location_sharing_on: 'Location ON',
+    location_sharing_off: 'Location OFF',
+    latest_location_at: 'Last location {time}',
+    no_location_yet: 'No location yet.',
+    view_location: 'View location',
+    precise_refresh: 'Precise refresh',
+    open_map: 'Open map',
+    flash_location_disabled: 'Location sharing is disabled for this account.',
+    flash_location_missing: 'No location captured yet.',
+    flash_precise_refresh_requested: 'Precise refresh requested. Expires at {time}',
     edit: 'Edit',
     revoke_sessions: 'Revoke Sessions',
     rooms_count: '{count} rooms',
@@ -1220,8 +1240,8 @@ function renderUsers() {
                             <div class="stack muted">
                               <span>${user.locale || '-'}</span>
                               <span>${user.statusMessage ? escapeHtml(user.statusMessage) : escapeHtml(t('no_status'))}</span>
-                              <span>${user.locationSharingEnabled ? 'Location ON' : 'Location OFF'}</span>
-                              <span>${user.latestLocationAt ? `Last location ${formatDate(user.latestLocationAt)}` : 'No location yet'}</span>
+                              <span>${escapeHtml(user.locationSharingEnabled ? t('location_sharing_on') : t('location_sharing_off'))}</span>
+                              <span>${user.latestLocationAt ? escapeHtml(t('latest_location_at', { time: formatDate(user.latestLocationAt) })) : escapeHtml(t('no_location_yet'))}</span>
                               <span>${formatDate(user.updatedAt)}</span>
                             </div>
                           </td>
@@ -1230,8 +1250,8 @@ function renderUsers() {
                               <button class="button secondary" type="button" data-edit-user="${escapeHtml(user.id)}">${escapeHtml(t('edit'))}</button>
                               ${
                                 user.locationSharingEnabled
-                                  ? `<button class="button ghost" type="button" data-view-location="${escapeHtml(user.id)}">View location</button>
-                                     <button class="button ghost" type="button" data-refresh-location="${escapeHtml(user.id)}">Precise refresh</button>`
+                                  ? `<button class="button ghost" type="button" data-view-location="${escapeHtml(user.id)}">${escapeHtml(t('view_location'))}</button>
+                                     <button class="button ghost" type="button" data-refresh-location="${escapeHtml(user.id)}">${escapeHtml(t('precise_refresh'))}</button>`
                                   : ''
                               }
                               <button class="button danger" type="button" data-revoke-user="${escapeHtml(user.id)}">${escapeHtml(t('revoke_sessions'))}</button>
@@ -1306,9 +1326,9 @@ function renderUsers() {
                                <span>${escapeHtml(formatDate(state.userLocations[draft.id].location.capturedAt))}</span>
                                <span>${escapeHtml(state.userLocations[draft.id].location.source)}</span>
                                <div class="button-row">
-                                 <button class="button ghost" type="button" data-open-location="${escapeHtml(draft.id)}">Open map</button>
+                                 <button class="button ghost" type="button" data-open-location="${escapeHtml(draft.id)}">${escapeHtml(t('open_map'))}</button>
                                </div>`
-                            : `<span>No location captured yet.</span>`
+                            : `<span>${escapeHtml(t('no_location_yet'))}</span>`
                         }
                       </div>
                     </div>`
@@ -1979,16 +1999,16 @@ app.addEventListener('click', async (event) => {
     }
 
     if (target.dataset.viewLocation) {
+      startEditUser(target.dataset.viewLocation)
       const result = await loadUserLocation(target.dataset.viewLocation)
       if (!result.sharingEnabled) {
-        setFlash('info', 'Location sharing is disabled for this account.')
+        setFlash('info', t('flash_location_disabled'))
         return
       }
       if (result.location) {
-        const { latitude, longitude } = result.location
-        window.open(`https://www.google.com/maps/search/?api=1&query=${latitude},${longitude}`, '_blank', 'noopener')
+        render()
       } else {
-        setFlash('info', 'No location captured yet.')
+        setFlash('info', t('flash_location_missing'))
       }
       return
     }
@@ -1997,7 +2017,7 @@ app.addEventListener('click', async (event) => {
       const result = await apiRequest(`/v1/guardian/users/${target.dataset.refreshLocation}/location/refresh`, {
         method: 'POST'
       })
-      setFlash('info', `Precise refresh requested. Expires at ${formatDate(result.expiresAt)}`)
+      setFlash('info', t('flash_precise_refresh_requested', { time: formatDate(result.expiresAt) }))
       return
     }
 
