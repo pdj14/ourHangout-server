@@ -484,6 +484,322 @@ export async function socialRoutes(app: FastifyInstance): Promise<void> {
     }
   );
 
+  app.get(
+    '/rooms/:roomId/members',
+    {
+      preHandler: app.authenticate,
+      schema: {
+        tags: ['social'],
+        summary: 'List shared room members and management permissions',
+        params: {
+          type: 'object',
+          required: ['roomId'],
+          properties: {
+            roomId: { type: 'string', format: 'uuid' }
+          }
+        }
+      }
+    },
+    async (request) => {
+      const params = request.params as { roomId: string };
+      const data = await app.socialService.listRoomMembers({
+        userId: request.user.sub,
+        roomId: params.roomId
+      });
+      return { success: true, data };
+    }
+  );
+
+  app.post(
+    '/rooms/:roomId/transfer-ownership',
+    {
+      preHandler: app.authenticate,
+      schema: {
+        tags: ['social'],
+        summary: 'Transfer shared room ownership',
+        params: {
+          type: 'object',
+          required: ['roomId'],
+          properties: {
+            roomId: { type: 'string', format: 'uuid' }
+          }
+        },
+        body: {
+          type: 'object',
+          required: ['targetUserId'],
+          properties: {
+            targetUserId: { type: 'string', format: 'uuid' }
+          }
+        }
+      }
+    },
+    async (request) => {
+      const params = request.params as { roomId: string };
+      const body = request.body as { targetUserId: string };
+      const data = await app.socialService.transferRoomOwnership({
+        userId: request.user.sub,
+        roomId: params.roomId,
+        targetUserId: body.targetUserId
+      });
+      return { success: true, data };
+    }
+  );
+
+  app.patch(
+    '/rooms/:roomId/members/:targetUserId',
+    {
+      preHandler: app.authenticate,
+      schema: {
+        tags: ['social'],
+        summary: 'Update shared room member role',
+        params: {
+          type: 'object',
+          required: ['roomId', 'targetUserId'],
+          properties: {
+            roomId: { type: 'string', format: 'uuid' },
+            targetUserId: { type: 'string', format: 'uuid' }
+          }
+        },
+        body: {
+          type: 'object',
+          required: ['role'],
+          properties: {
+            role: { type: 'string', enum: ['admin', 'member'] }
+          }
+        }
+      }
+    },
+    async (request) => {
+      const params = request.params as { roomId: string; targetUserId: string };
+      const body = request.body as { role: 'admin' | 'member' };
+      const data = await app.socialService.updateRoomMemberRole({
+        userId: request.user.sub,
+        roomId: params.roomId,
+        targetUserId: params.targetUserId,
+        role: body.role
+      });
+      return { success: true, data };
+    }
+  );
+
+  app.delete(
+    '/rooms/:roomId/members/:targetUserId',
+    {
+      preHandler: app.authenticate,
+      schema: {
+        tags: ['social'],
+        summary: 'Remove a shared room member',
+        params: {
+          type: 'object',
+          required: ['roomId', 'targetUserId'],
+          properties: {
+            roomId: { type: 'string', format: 'uuid' },
+            targetUserId: { type: 'string', format: 'uuid' }
+          }
+        }
+      }
+    },
+    async (request) => {
+      const params = request.params as { roomId: string; targetUserId: string };
+      const data = await app.socialService.kickRoomMember({
+        userId: request.user.sub,
+        roomId: params.roomId,
+        targetUserId: params.targetUserId
+      });
+      return { success: true, data };
+    }
+  );
+
+  app.get(
+    '/rooms/:roomId/member-profiles',
+    {
+      preHandler: app.authenticate,
+      schema: {
+        tags: ['social'],
+        summary: 'List family room member profiles',
+        params: {
+          type: 'object',
+          required: ['roomId'],
+          properties: {
+            roomId: { type: 'string', format: 'uuid' }
+          }
+        }
+      }
+    },
+    async (request) => {
+      const params = request.params as { roomId: string };
+      const data = await app.socialService.listFamilyRoomMemberProfiles({
+        userId: request.user.sub,
+        roomId: params.roomId
+      });
+      return { success: true, data };
+    }
+  );
+
+  app.patch(
+    '/rooms/:roomId/member-profiles/:targetUserId',
+    {
+      preHandler: app.authenticate,
+      schema: {
+        tags: ['social'],
+        summary: 'Update family room member alias',
+        params: {
+          type: 'object',
+          required: ['roomId', 'targetUserId'],
+          properties: {
+            roomId: { type: 'string', format: 'uuid' },
+            targetUserId: { type: 'string', format: 'uuid' }
+          }
+        },
+        body: {
+          type: 'object',
+          properties: {
+            alias: { type: ['string', 'null'], minLength: 1, maxLength: 100 }
+          }
+        }
+      }
+    },
+    async (request) => {
+      const params = request.params as { roomId: string; targetUserId: string };
+      const body = (request.body as { alias?: string | null } | undefined) ?? {};
+      const data = await app.socialService.updateFamilyRoomMemberProfile({
+        userId: request.user.sub,
+        roomId: params.roomId,
+        targetUserId: params.targetUserId,
+        alias: body.alias
+      });
+      return { success: true, data };
+    }
+  );
+
+  app.get(
+    '/rooms/:roomId/relationships',
+    {
+      preHandler: app.authenticate,
+      schema: {
+        tags: ['social'],
+        summary: 'List family room guardian-child relationships',
+        params: {
+          type: 'object',
+          required: ['roomId'],
+          properties: {
+            roomId: { type: 'string', format: 'uuid' }
+          }
+        }
+      }
+    },
+    async (request) => {
+      const params = request.params as { roomId: string };
+      const data = await app.socialService.listFamilyRoomRelationships({
+        userId: request.user.sub,
+        roomId: params.roomId
+      });
+      return { success: true, data };
+    }
+  );
+
+  app.post(
+    '/rooms/:roomId/relationships',
+    {
+      preHandler: app.authenticate,
+      schema: {
+        tags: ['social'],
+        summary: 'Create family room guardian-child relationship',
+        params: {
+          type: 'object',
+          required: ['roomId'],
+          properties: {
+            roomId: { type: 'string', format: 'uuid' }
+          }
+        },
+        body: {
+          type: 'object',
+          required: ['targetUserId', 'as'],
+          properties: {
+            targetUserId: { type: 'string', format: 'uuid' },
+            as: { type: 'string', enum: ['guardian', 'child'] }
+          }
+        }
+      }
+    },
+    async (request) => {
+      const params = request.params as { roomId: string };
+      const body = request.body as { targetUserId: string; as: 'guardian' | 'child' };
+      const data = await app.socialService.createFamilyRoomRelationship({
+        userId: request.user.sub,
+        roomId: params.roomId,
+        targetUserId: body.targetUserId,
+        as: body.as
+      });
+      return { success: true, data };
+    }
+  );
+
+  app.post(
+    '/rooms/:roomId/relationships/:relationshipId/respond',
+    {
+      preHandler: app.authenticate,
+      schema: {
+        tags: ['social'],
+        summary: 'Respond to a pending family room guardian-child request',
+        params: {
+          type: 'object',
+          required: ['roomId', 'relationshipId'],
+          properties: {
+            roomId: { type: 'string', format: 'uuid' },
+            relationshipId: { type: 'string', format: 'uuid' }
+          }
+        },
+        body: {
+          type: 'object',
+          required: ['decision'],
+          properties: {
+            decision: { type: 'string', enum: ['accept', 'reject'] }
+          }
+        }
+      }
+    },
+    async (request) => {
+      const params = request.params as { roomId: string; relationshipId: string };
+      const body = request.body as { decision: 'accept' | 'reject' };
+      const data = await app.socialService.respondFamilyRoomRelationship({
+        userId: request.user.sub,
+        roomId: params.roomId,
+        relationshipId: params.relationshipId,
+        decision: body.decision
+      });
+      return { success: true, data };
+    }
+  );
+
+  app.delete(
+    '/rooms/:roomId/relationships/:relationshipId',
+    {
+      preHandler: app.authenticate,
+      schema: {
+        tags: ['social'],
+        summary: 'Delete family room guardian-child relationship',
+        params: {
+          type: 'object',
+          required: ['roomId', 'relationshipId'],
+          properties: {
+            roomId: { type: 'string', format: 'uuid' },
+            relationshipId: { type: 'string', format: 'uuid' }
+          }
+        }
+      }
+    },
+    async (request) => {
+      const params = request.params as { roomId: string; relationshipId: string };
+      const data = await app.socialService.deleteFamilyRoomRelationship({
+        userId: request.user.sub,
+        roomId: params.roomId,
+        relationshipId: params.relationshipId
+      });
+      return { success: true, data };
+    }
+  );
+
   app.post(
     '/rooms/:roomId/leave',
     {

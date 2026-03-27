@@ -8,7 +8,18 @@ import { AppError, ErrorCodes } from '../../lib/errors';
 import { FcmPushService } from '../../lib/push/fcm-push.service';
 import type { ConnectionManager } from '../chat/connection-manager';
 import type { ClawBridgeService } from '../openclaw/claw-bridge.service';
-import type { MessageKind, RoomDto, RoomMessageDto, RoomType, UserProfileDto } from './social.types';
+import type {
+  FamilyRoomMemberProfileDto,
+  FamilyRoomRelationshipDto,
+  FamilyRoomRelationshipRequestDto,
+  MessageKind,
+  RoomMemberDto,
+  RoomMemberListDto,
+  RoomDto,
+  RoomMessageDto,
+  RoomType,
+  UserProfileDto
+} from './social.types';
 
 type CursorInput = {
   at: Date;
@@ -76,6 +87,7 @@ type RoomListRow = {
   id: string;
   type: RoomType;
   title: string | null;
+  created_by: string;
   created_at: Date;
   updated_at: Date;
   favorite: boolean | null;
@@ -89,6 +101,35 @@ type RoomListRow = {
 type RoomMemberRow = {
   room_id: string;
   user_id: string;
+};
+
+type RoomMembershipRow = RoomRow & {
+  member_role: 'admin' | 'member';
+};
+
+type RoomMemberProfileRow = {
+  user_id: string;
+  role: 'admin' | 'member';
+  display_name: string | null;
+  email: string;
+  avatar_url: string | null;
+  alias: string | null;
+  joined_at: Date;
+};
+
+type RoomRelationshipRow = {
+  id: string;
+  guardian_user_id: string;
+  guardian_name: string | null;
+  guardian_email: string;
+  child_user_id: string;
+  child_name: string | null;
+  child_email: string;
+  status: 'pending' | 'active' | 'rejected' | 'removed';
+  created_by: string | null;
+  responded_by_user_id: string | null;
+  responded_at: Date | null;
+  created_at: Date;
 };
 
 type DirectRoomPeerTitleRow = {
@@ -1265,6 +1306,7 @@ export class SocialService {
       `SELECT r.id,
               r.type,
               r.title,
+              r.created_by,
               r.created_at,
               r.updated_at,
               rus.favorite,
@@ -1418,6 +1460,547 @@ export class SocialService {
     return this.createSharedRoom(userId, { title: params.title, memberUserIds: params.memberUserIds }, params.type);
   }
 
+  async listRoomMembers(params: { userId: string; roomId: string }): Promise<RoomMemberListDto> {
+    const membership = await this.getRoomMembership(params.roomId, params.userId);
+    const result = await this.db.query<RoomMemberProfileRow>(
+      `SELECT rm.user_id,
+              rm.role,
+              u.display_name,
+              u.email,
+              u.avatar_url,
+              rmp.alias,
+              rm.joined_at
+       FROM room_members rm
+       INNER JOIN users u ON u.id = rm.user_id
+       LEFT JOIN room_member_profiles rmp
+              ON rmp.room_id = rm.room_id
+             AND rmp.user_id = rm.user_id
+       WHERE rm.room_id = $1
+         AND rm.left_at IS NULL
+       ORDER BY CASE WHEN rm.user_id = $2 THEN 0 ELSE 1 END,
+                CASE WHEN rm.user_id = $3 THEN 0 ELSE 1 END,
+                CASE WHEN rm.role = 'admin' THEN 0 ELSE 1 END,
+                rm.joined_at ASC`,
+      [params.roomId, membership.created_by, params.userId]
+    );
+
+    return {
+      roomId: params.roomId,
+      ownerUserId: membership.created_by,
+      myRole: membership.member_role,
+      canTransferOwnership: membership.created_by === params.userId,
+      canManageAdmins: membership.created_by === params.userId,
+      canKickMembers: membership.created_by === params.userId || membership.member_role === 'admin',
+      items: result.rows.map((row) => this.mapRoomMember(row, membership.created_by))
+    };
+  }
+
+  async transferRoomOwnership(params: {
+    userId: string;
+    roomId: string;
+    targetUserId: string;
+  }): Promise<{ roomId: string; ownerUserId: string }> {
+    const membership = await this.getRoomMembership(params.roomId, params.userId);
+    this.assertSharedRoom(membership);
+    if (membership.created_by !== params.userId) {
+      throw new AppError(403, ErrorCodes.FORBIDDEN, 'Only the room owner can transfer ownership.');
+    }
+
+    const targetUserId = params.targetUserId.trim();
+    if (!targetUserId) {
+      throw new AppError(400, ErrorCodes.VALIDATION_ERROR, 'Target user id is required.');
+    }
+    if (targetUserId === params.userId) {
+      return { roomId: params.roomId, ownerUserId: targetUserId };
+    }
+
+    await this.assertActiveRoomMember(params.roomId, targetUserId);
+
+    const client = await this.db.connect();
+    try {
+      await client.query('BEGIN');
+      await client.query(
+        `UPDATE room_members
+         SET role = 'admin'
+         WHERE room_id = $1
+           AND user_id = $2
+           AND left_at IS NULL`,
+        [params.roomId, targetUserId]
+      );
+      await client.query(
+        `UPDATE rooms
+         SET created_by = $2,
+             updated_at = NOW()
+         WHERE id = $1`,
+        [params.roomId, targetUserId]
+      );
+      await client.query('COMMIT');
+    } catch (error) {
+      await client.query('ROLLBACK');
+      throw error;
+    } finally {
+      client.release();
+    }
+
+    this.emitToUsers(await this.getActiveRoomMemberIds(params.roomId), {
+      event: 'room.updated',
+      data: { roomId: params.roomId }
+    });
+
+    return {
+      roomId: params.roomId,
+      ownerUserId: targetUserId
+    };
+  }
+
+  async updateRoomMemberRole(params: {
+    userId: string;
+    roomId: string;
+    targetUserId: string;
+    role: 'admin' | 'member';
+  }): Promise<{ userId: string; role: 'admin' | 'member' }> {
+    const membership = await this.getRoomMembership(params.roomId, params.userId);
+    this.assertSharedRoom(membership);
+    if (membership.created_by !== params.userId) {
+      throw new AppError(403, ErrorCodes.FORBIDDEN, 'Only the room owner can manage admins.');
+    }
+
+    const targetUserId = params.targetUserId.trim();
+    if (!targetUserId) {
+      throw new AppError(400, ErrorCodes.VALIDATION_ERROR, 'Target user id is required.');
+    }
+    if (targetUserId === membership.created_by) {
+      throw new AppError(409, ErrorCodes.CONFLICT, 'The room owner role must be transferred, not downgraded.');
+    }
+
+    await this.assertActiveRoomMember(params.roomId, targetUserId);
+
+    await this.db.query(
+      `UPDATE room_members
+       SET role = $3
+       WHERE room_id = $1
+         AND user_id = $2
+         AND left_at IS NULL`,
+      [params.roomId, targetUserId, params.role]
+    );
+
+    this.emitToUsers(await this.getActiveRoomMemberIds(params.roomId), {
+      event: 'room.updated',
+      data: { roomId: params.roomId }
+    });
+
+    return {
+      userId: targetUserId,
+      role: params.role
+    };
+  }
+
+  async kickRoomMember(params: {
+    userId: string;
+    roomId: string;
+    targetUserId: string;
+  }): Promise<{ userId: string; removed: true }> {
+    const membership = await this.getRoomMembership(params.roomId, params.userId);
+    this.assertSharedRoom(membership);
+
+    const targetUserId = params.targetUserId.trim();
+    if (!targetUserId) {
+      throw new AppError(400, ErrorCodes.VALIDATION_ERROR, 'Target user id is required.');
+    }
+    if (targetUserId === params.userId) {
+      throw new AppError(409, ErrorCodes.CONFLICT, 'Use leave for removing yourself from a room.');
+    }
+
+    const targetMembership = await this.getRoomMembership(params.roomId, targetUserId);
+    if (targetMembership.created_by === targetUserId) {
+      throw new AppError(409, ErrorCodes.CONFLICT, 'The room owner cannot be removed.');
+    }
+
+    const actorIsOwner = membership.created_by === params.userId;
+    const actorIsAdmin = membership.member_role === 'admin';
+    if (!actorIsOwner && !actorIsAdmin) {
+      throw new AppError(403, ErrorCodes.FORBIDDEN, 'Only the room owner or admins can remove members.');
+    }
+    if (!actorIsOwner && targetMembership.member_role === 'admin') {
+      throw new AppError(403, ErrorCodes.FORBIDDEN, 'Only the room owner can remove another admin.');
+    }
+
+    await this.removeRoomMembership(params.roomId, targetUserId);
+
+    this.emitToUsers(await this.getAllRoomMemberIds(params.roomId), {
+      event: 'room.updated',
+      data: { roomId: params.roomId }
+    });
+
+    return {
+      userId: targetUserId,
+      removed: true
+    };
+  }
+
+  async listFamilyRoomMemberProfiles(params: {
+    userId: string;
+    roomId: string;
+  }): Promise<{ canManage: boolean; items: FamilyRoomMemberProfileDto[] }> {
+    const membership = await this.getRoomMembership(params.roomId, params.userId);
+    this.assertFamilyRoom(membership);
+
+    const result = await this.db.query<RoomMemberProfileRow>(
+      `SELECT rm.user_id,
+              rm.role,
+              u.display_name,
+              u.email,
+              u.avatar_url,
+              rmp.alias,
+              rm.joined_at
+       FROM room_members rm
+       INNER JOIN users u ON u.id = rm.user_id
+       LEFT JOIN room_member_profiles rmp
+              ON rmp.room_id = rm.room_id
+             AND rmp.user_id = rm.user_id
+       WHERE rm.room_id = $1
+         AND rm.left_at IS NULL
+       ORDER BY CASE WHEN rm.user_id = $2 THEN 0 ELSE 1 END,
+                rm.joined_at ASC`,
+      [params.roomId, params.userId]
+    );
+
+    return {
+      canManage: membership.member_role === 'admin',
+      items: result.rows.map((row) => ({
+        userId: row.user_id,
+        name: normalizeName(row.display_name, row.email),
+        ...(row.avatar_url ? { avatarUri: row.avatar_url } : {}),
+        ...(row.alias?.trim() ? { alias: row.alias.trim() } : {})
+      }))
+    };
+  }
+
+  async updateFamilyRoomMemberProfile(params: {
+    userId: string;
+    roomId: string;
+    targetUserId: string;
+    alias?: string | null;
+  }): Promise<{ userId: string; alias?: string }> {
+    const membership = await this.getRoomMembership(params.roomId, params.userId);
+    this.assertFamilyRoom(membership);
+
+    const targetUserId = params.targetUserId.trim();
+    if (!targetUserId) {
+      throw new AppError(400, ErrorCodes.VALIDATION_ERROR, 'Target user id is required.');
+    }
+
+    if (targetUserId !== params.userId) {
+      throw new AppError(403, ErrorCodes.FORBIDDEN, 'Members can edit only their own alias.');
+    }
+
+    await this.assertActiveRoomMember(params.roomId, targetUserId);
+
+    const alias = (params.alias || '').trim();
+    if (alias.length > 100) {
+      throw new AppError(400, ErrorCodes.VALIDATION_ERROR, 'Alias must be between 1 and 100 characters.');
+    }
+
+    if (!alias) {
+      await this.db.query(
+        `DELETE FROM room_member_profiles
+         WHERE room_id = $1
+           AND user_id = $2`,
+        [params.roomId, targetUserId]
+      );
+    } else {
+      await this.db.query(
+        `INSERT INTO room_member_profiles (room_id, user_id, alias, role_label, membership_kind, created_at, updated_at)
+         VALUES ($1, $2, $3, NULL, NULL, NOW(), NOW())
+         ON CONFLICT (room_id, user_id)
+         DO UPDATE SET
+           alias = EXCLUDED.alias,
+           updated_at = NOW()`,
+        [params.roomId, targetUserId, alias]
+      );
+    }
+
+    this.emitToUsers(await this.getActiveRoomMemberIds(params.roomId), {
+      event: 'room.updated',
+      data: { roomId: params.roomId }
+    });
+
+    return {
+      userId: targetUserId,
+      ...(alias ? { alias } : {})
+    };
+  }
+
+  async listFamilyRoomRelationships(params: {
+    userId: string;
+    roomId: string;
+  }): Promise<{
+    items: FamilyRoomRelationshipDto[];
+    pendingIncoming: FamilyRoomRelationshipRequestDto[];
+    pendingOutgoing: FamilyRoomRelationshipRequestDto[];
+  }> {
+    const membership = await this.getRoomMembership(params.roomId, params.userId);
+    this.assertFamilyRoom(membership);
+
+    const result = await this.db.query<RoomRelationshipRow>(
+      `SELECT rr.id,
+              rr.guardian_user_id,
+              guardian.display_name AS guardian_name,
+              guardian.email AS guardian_email,
+              rr.child_user_id,
+              child.display_name AS child_name,
+              child.email AS child_email,
+              rr.status,
+              rr.created_by,
+              rr.responded_by_user_id,
+              rr.responded_at,
+              rr.created_at
+       FROM room_relationships rr
+       INNER JOIN users guardian ON guardian.id = rr.guardian_user_id
+       INNER JOIN users child ON child.id = rr.child_user_id
+       WHERE rr.room_id = $1
+         AND rr.relationship_type = 'guardian_child'
+       ORDER BY rr.created_at ASC, rr.id ASC`,
+      [params.roomId]
+    );
+
+    return {
+      items: result.rows.filter((row) => row.status === 'active').map((row) => this.mapFamilyRoomRelationship(row)),
+      pendingIncoming: result.rows
+        .filter((row) => row.status === 'pending' && row.created_by !== params.userId && (row.guardian_user_id === params.userId || row.child_user_id === params.userId))
+        .map((row) => this.mapFamilyRoomRelationshipRequest(row)),
+      pendingOutgoing: result.rows
+        .filter((row) => row.status === 'pending' && row.created_by === params.userId)
+        .map((row) => this.mapFamilyRoomRelationshipRequest(row))
+    };
+  }
+
+  async createFamilyRoomRelationship(params: {
+    userId: string;
+    roomId: string;
+    targetUserId: string;
+    as: 'guardian' | 'child';
+  }): Promise<FamilyRoomRelationshipRequestDto> {
+    const membership = await this.getRoomMembership(params.roomId, params.userId);
+    this.assertFamilyRoom(membership);
+
+    const targetUserId = params.targetUserId.trim();
+    if (!targetUserId) {
+      throw new AppError(400, ErrorCodes.VALIDATION_ERROR, 'Target user id is required.');
+    }
+    const guardianUserId = params.as === 'guardian' ? params.userId : targetUserId;
+    const childUserId = params.as === 'child' ? params.userId : targetUserId;
+    if (guardianUserId === childUserId) {
+      throw new AppError(409, ErrorCodes.CONFLICT, 'Guardian and child cannot be the same member.');
+    }
+
+    await this.assertActiveRoomMember(params.roomId, guardianUserId);
+    await this.assertActiveRoomMember(params.roomId, childUserId);
+
+    const existing = await this.db.query<{
+      id: string;
+      status: 'pending' | 'active' | 'rejected' | 'removed';
+      created_by: string | null;
+    }>(
+      `SELECT id, status, created_by
+       FROM room_relationships
+       WHERE room_id = $1
+         AND guardian_user_id = $2
+         AND child_user_id = $3
+         AND relationship_type = 'guardian_child'
+       LIMIT 1`,
+      [params.roomId, guardianUserId, childUserId]
+    );
+    const reverse = await this.db.query<{ id: string; status: 'pending' | 'active' | 'rejected' | 'removed' }>(
+      `SELECT id, status
+       FROM room_relationships
+       WHERE room_id = $1
+         AND guardian_user_id = $2
+         AND child_user_id = $3
+         AND relationship_type = 'guardian_child'
+         AND status IN ('pending', 'active')
+       LIMIT 1`,
+      [params.roomId, childUserId, guardianUserId]
+    );
+    if (reverse.rows[0]) {
+      throw new AppError(409, ErrorCodes.CONFLICT, 'The reverse guardian-child link already exists.');
+    }
+
+    if (existing.rows[0]?.status === 'active') {
+      throw new AppError(409, ErrorCodes.CONFLICT, 'Users are already connected by a guardian-child relationship.');
+    }
+    if (existing.rows[0]?.status === 'pending') {
+      if (existing.rows[0].created_by === params.userId) {
+        const pending = await this.getFamilyRoomRelationshipById(existing.rows[0].id);
+        if (!pending) {
+          throw new AppError(500, ErrorCodes.INTERNAL_ERROR, 'Failed to load pending guardian-child request.');
+        }
+        return this.mapFamilyRoomRelationshipRequest(pending);
+      }
+      throw new AppError(409, ErrorCodes.CONFLICT, 'A pending guardian-child request already exists.');
+    }
+
+    const result = await this.db.query<{ id: string }>(
+      `INSERT INTO room_relationships (
+         room_id,
+         guardian_user_id,
+         child_user_id,
+         relationship_type,
+         status,
+         created_by,
+         responded_by_user_id,
+         responded_at,
+         created_at,
+         updated_at
+       )
+       VALUES ($1, $2, $3, 'guardian_child', 'pending', $4, NULL, NULL, NOW(), NOW())
+       ON CONFLICT (room_id, guardian_user_id, child_user_id, relationship_type)
+       DO UPDATE SET
+         status = 'pending',
+         created_by = EXCLUDED.created_by,
+         responded_by_user_id = NULL,
+         responded_at = NULL,
+         updated_at = NOW()
+       RETURNING id`,
+      [params.roomId, guardianUserId, childUserId, params.userId]
+    );
+
+    const relationship = await this.getFamilyRoomRelationshipById(result.rows[0].id);
+    if (!relationship) {
+      throw new AppError(500, ErrorCodes.INTERNAL_ERROR, 'Failed to load pending guardian-child request.');
+    }
+
+    this.emitToUsers(await this.getActiveRoomMemberIds(params.roomId), {
+      event: 'room.updated',
+      data: { roomId: params.roomId }
+    });
+
+    return this.mapFamilyRoomRelationshipRequest(relationship);
+  }
+
+  async respondFamilyRoomRelationship(params: {
+    userId: string;
+    roomId: string;
+    relationshipId: string;
+    decision: 'accept' | 'reject';
+  }): Promise<{ relationshipId: string; status: 'active' | 'rejected' }> {
+    const membership = await this.getRoomMembership(params.roomId, params.userId);
+    this.assertFamilyRoom(membership);
+
+    const result = await this.db.query<{
+      id: string;
+      guardian_user_id: string;
+      child_user_id: string;
+      created_by: string | null;
+      status: 'pending' | 'active' | 'rejected' | 'removed';
+    }>(
+      `SELECT id, guardian_user_id, child_user_id, created_by, status
+       FROM room_relationships
+       WHERE id = $1
+         AND room_id = $2
+         AND relationship_type = 'guardian_child'
+       LIMIT 1`,
+      [params.relationshipId, params.roomId]
+    );
+
+    const row = result.rows[0];
+    if (!row || row.status !== 'pending') {
+      throw new AppError(404, ErrorCodes.RESOURCE_NOT_FOUND, 'Pending guardian-child request not found.');
+    }
+    if (row.created_by === params.userId) {
+      throw new AppError(409, ErrorCodes.CONFLICT, 'The requester cannot accept their own guardian-child request.');
+    }
+    if (row.guardian_user_id !== params.userId && row.child_user_id !== params.userId) {
+      throw new AppError(403, ErrorCodes.FORBIDDEN, 'Only the target member can respond to this guardian-child request.');
+    }
+
+    const nextStatus = params.decision === 'accept' ? 'active' : 'rejected';
+    await this.db.query(
+      `UPDATE room_relationships
+       SET status = $3,
+           responded_by_user_id = $4,
+           responded_at = NOW(),
+           updated_at = NOW()
+       WHERE id = $1
+         AND room_id = $2`,
+      [params.relationshipId, params.roomId, nextStatus, params.userId]
+    );
+
+    this.emitToUsers(await this.getActiveRoomMemberIds(params.roomId), {
+      event: 'room.updated',
+      data: { roomId: params.roomId }
+    });
+
+    return {
+      relationshipId: params.relationshipId,
+      status: nextStatus
+    };
+  }
+
+  async deleteFamilyRoomRelationship(params: {
+    userId: string;
+    roomId: string;
+    relationshipId: string;
+  }): Promise<{ relationshipId: string; deleted: true }> {
+    const membership = await this.getRoomMembership(params.roomId, params.userId);
+    this.assertFamilyRoom(membership);
+    const actorIsOwner = membership.created_by === params.userId;
+    const actorIsAdmin = membership.member_role === 'admin';
+
+    const existing = await this.db.query<{
+      id: string;
+      guardian_user_id: string;
+      child_user_id: string;
+      created_by: string | null;
+      status: 'pending' | 'active' | 'rejected' | 'removed';
+    }>(
+      `SELECT id, guardian_user_id, child_user_id, created_by, status
+       FROM room_relationships
+       WHERE id = $1
+         AND room_id = $2
+         AND relationship_type = 'guardian_child'
+       LIMIT 1`,
+      [params.relationshipId, params.roomId]
+    );
+
+    const row = existing.rows[0];
+    if (!row || !['pending', 'active'].includes(row.status)) {
+      throw new AppError(404, ErrorCodes.RESOURCE_NOT_FOUND, 'Active guardian-child relationship not found.');
+    }
+
+    const actorIsParticipant = row.guardian_user_id === params.userId || row.child_user_id === params.userId;
+    const actorCanCancelPending = row.status === 'pending' && row.created_by === params.userId;
+    if (!actorIsOwner && !actorIsAdmin && !actorIsParticipant && !actorCanCancelPending) {
+      throw new AppError(403, ErrorCodes.FORBIDDEN, 'You do not have access to this guardian-child relationship.');
+    }
+
+    const result = await this.db.query<{ id: string }>(
+      `UPDATE room_relationships
+       SET status = 'removed',
+           updated_at = NOW()
+       WHERE id = $1
+         AND room_id = $2
+         AND relationship_type = 'guardian_child'
+         AND status IN ('pending', 'active')
+       RETURNING id`,
+      [params.relationshipId, params.roomId]
+    );
+
+    if (!result.rows[0]) {
+      throw new AppError(404, ErrorCodes.RESOURCE_NOT_FOUND, 'Active guardian-child relationship not found.');
+    }
+
+    this.emitToUsers(await this.getActiveRoomMemberIds(params.roomId), {
+      event: 'room.updated',
+      data: { roomId: params.roomId }
+    });
+
+    return {
+      relationshipId: result.rows[0].id,
+      deleted: true
+    };
+  }
+
   async updateRoomSettings(
     userId: string,
     roomId: string,
@@ -1427,7 +2010,7 @@ export class SocialService {
       title?: string;
     }
   ): Promise<{ favorite: boolean; muted: boolean; title?: string }> {
-    const room = await this.assertRoomMembership(roomId, userId);
+    const membership = await this.getRoomMembership(roomId, userId);
 
     await this.db.query(
       `INSERT INTO room_user_settings (room_id, user_id, favorite, muted, created_at, updated_at)
@@ -1441,8 +2024,11 @@ export class SocialService {
     const hasTitle = input.title !== undefined;
     const nextTitle = hasTitle ? (input.title?.trim() || '') : '';
 
-    if (hasTitle && room.type === 'direct') {
+    if (hasTitle && membership.type === 'direct') {
       throw new AppError(409, ErrorCodes.CONFLICT, 'Only group/family room title can be changed.');
+    }
+    if (hasTitle && membership.member_role !== 'admin') {
+      throw new AppError(403, ErrorCodes.FORBIDDEN, 'Only room admins can change the room title.');
     }
     if (hasTitle && (nextTitle.length < 1 || nextTitle.length > 100)) {
       throw new AppError(400, ErrorCodes.VALIDATION_ERROR, 'Shared room title must be 1-100 characters.');
@@ -1490,22 +2076,49 @@ export class SocialService {
   }
 
   async leaveRoom(userId: string, roomId: string): Promise<{ left: boolean }> {
-    const room = await this.assertRoomMembership(roomId, userId);
-    if (room.type === 'direct') {
+    const membership = await this.getRoomMembership(roomId, userId);
+    if (membership.type === 'direct') {
       throw new AppError(409, ErrorCodes.CONFLICT, 'Use DELETE /rooms/:roomId for direct rooms.');
+    }
+
+    const activeMembers = await this.getActiveRoomMemberIds(roomId);
+    const remainingMembers = activeMembers.filter((memberId) => memberId !== userId);
+    if (membership.created_by === userId && remainingMembers.length > 0) {
+      throw new AppError(409, ErrorCodes.CONFLICT, 'Transfer room ownership before leaving this room.');
+    }
+
+    if (remainingMembers.length === 0) {
+      const client = await this.db.connect();
+      try {
+        await client.query('BEGIN');
+        await this.removeRoomMembership(roomId, userId, client);
+        await client.query(
+          `UPDATE rooms
+           SET deleted_at = NOW(),
+               updated_at = NOW()
+           WHERE id = $1`,
+          [roomId]
+        );
+        await client.query('COMMIT');
+      } catch (error) {
+        await client.query('ROLLBACK');
+        throw error;
+      } finally {
+        client.release();
+      }
+
+      this.emitToUsers([userId], {
+        event: 'room.updated',
+        data: { roomId, deleted: true }
+      });
+
+      return { left: true };
     }
 
     const profile = await this.getUserProfileRow(userId);
     const leaveText = makeSystemMessageToken('member_left', normalizeName(profile.display_name, profile.email));
 
-    await this.db.query(
-      `UPDATE room_members
-       SET left_at = NOW()
-       WHERE room_id = $1
-         AND user_id = $2
-         AND left_at IS NULL`,
-      [roomId, userId]
-    );
+    await this.removeRoomMembership(roomId, userId);
 
     await this.db.query(
       `UPDATE rooms
@@ -1537,7 +2150,7 @@ export class SocialService {
   }
 
   async deleteRoom(userId: string, roomId: string): Promise<{ deleted: boolean }> {
-    const room = await this.assertRoomMembership(roomId, userId);
+    const room = await this.getRoomMembership(roomId, userId);
 
     if (room.type === 'direct') {
       const client = await this.db.connect();
@@ -1567,7 +2180,7 @@ export class SocialService {
     }
 
     if (room.created_by !== userId) {
-      throw new AppError(403, ErrorCodes.FORBIDDEN, 'Only room creator can delete group/family room.');
+      throw new AppError(403, ErrorCodes.FORBIDDEN, 'Only the room owner can delete this room.');
     }
 
     await this.db.query(
@@ -1836,11 +2449,10 @@ export class SocialService {
            AND delivery = 'sent'`,
         [finalMessage.id]
       );
-
-      const reloaded = await this.fetchMessageById(finalMessage.id);
-      if (reloaded) {
-        finalMessage = reloaded;
-      }
+      finalMessage = {
+        ...finalMessage,
+        delivery: 'delivered'
+      };
 
       this.emitToUsers(memberUserIds, {
         event: 'message.delivery',
@@ -2433,6 +3045,7 @@ export class SocialService {
       `SELECT r.id,
               r.type,
               r.title,
+              r.created_by,
               r.created_at,
               r.updated_at,
               rus.favorite,
@@ -2520,6 +3133,7 @@ export class SocialService {
       type: row.type,
       title,
       members,
+      ownerUserId: row.created_by,
       isGroup: row.type !== 'direct',
       favorite: row.favorite ?? false,
       muted: row.muted ?? false,
@@ -2747,16 +3361,23 @@ export class SocialService {
     return result.rows;
   }
 
-  private async assertRoomMembership(roomId: string, userId: string, client?: PoolClient): Promise<RoomRow> {
+  private assertSharedRoom(room: RoomRow | RoomMembershipRow): void {
+    if (room.type === 'direct') {
+      throw new AppError(409, ErrorCodes.CONFLICT, 'This action is not available for direct rooms.');
+    }
+  }
+
+  private async getRoomMembership(roomId: string, userId: string, client?: PoolClient): Promise<RoomMembershipRow> {
     const executor = client ?? this.db;
-    const result = await executor.query<RoomRow>(
+    const result = await executor.query<RoomMembershipRow>(
       `SELECT r.id,
               r.type,
               r.title,
               r.created_by,
               r.created_at,
               r.updated_at,
-              r.deleted_at
+              r.deleted_at,
+              m.role AS member_role
        FROM rooms r
        INNER JOIN room_members m ON m.room_id = r.id
        WHERE r.id = $1
@@ -2773,6 +3394,43 @@ export class SocialService {
     }
 
     return row;
+  }
+
+  private assertFamilyRoom(room: RoomRow | RoomMembershipRow): void {
+    if (room.type !== 'family') {
+      throw new AppError(409, ErrorCodes.CONFLICT, 'This action is only available for family rooms.');
+    }
+  }
+
+  private async assertActiveRoomMember(roomId: string, userId: string, client?: PoolClient): Promise<void> {
+    const executor = client ?? this.db;
+    const result = await executor.query<{ exists: boolean }>(
+      `SELECT EXISTS(
+         SELECT 1
+         FROM room_members
+         WHERE room_id = $1
+           AND user_id = $2
+           AND left_at IS NULL
+       ) AS exists`,
+      [roomId, userId]
+    );
+
+    if (!(result.rows[0]?.exists ?? false)) {
+      throw new AppError(404, ErrorCodes.RESOURCE_NOT_FOUND, 'Target user is not an active member of this room.');
+    }
+  }
+
+  private async assertRoomMembership(roomId: string, userId: string, client?: PoolClient): Promise<RoomRow> {
+    const membership = await this.getRoomMembership(roomId, userId, client);
+    return {
+      id: membership.id,
+      type: membership.type,
+      title: membership.title,
+      created_by: membership.created_by,
+      created_at: membership.created_at,
+      updated_at: membership.updated_at,
+      deleted_at: membership.deleted_at
+    };
   }
 
   private async getActiveRoomMemberIds(roomId: string, client?: PoolClient): Promise<string[]> {
@@ -2799,6 +3457,28 @@ export class SocialService {
     );
 
     return result.rows.map((row) => row.user_id);
+  }
+
+  private async removeRoomMembership(roomId: string, targetUserId: string, client?: PoolClient): Promise<void> {
+    const executor = client ?? this.db;
+    await executor.query(
+      `UPDATE room_members
+       SET left_at = NOW()
+       WHERE room_id = $1
+         AND user_id = $2
+         AND left_at IS NULL`,
+      [roomId, targetUserId]
+    );
+
+    await executor.query(
+      `UPDATE room_relationships
+       SET status = 'removed',
+           updated_at = NOW()
+       WHERE room_id = $1
+         AND status IN ('pending', 'active')
+         AND (guardian_user_id = $2 OR child_user_id = $2)`,
+      [roomId, targetUserId]
+    );
   }
 
   private async getUserProfileRow(userId: string): Promise<UserProfileRow> {
@@ -2834,6 +3514,32 @@ export class SocialService {
     );
 
     return this.fetchMessageById(insertResult.rows[0].id);
+  }
+
+  private async getFamilyRoomRelationshipById(relationshipId: string): Promise<RoomRelationshipRow | null> {
+    const result = await this.db.query<RoomRelationshipRow>(
+      `SELECT rr.id,
+              rr.guardian_user_id,
+              guardian.display_name AS guardian_name,
+              guardian.email AS guardian_email,
+              rr.child_user_id,
+              child.display_name AS child_name,
+              child.email AS child_email,
+              rr.status,
+              rr.created_by,
+              rr.responded_by_user_id,
+              rr.responded_at,
+              rr.created_at
+       FROM room_relationships rr
+       INNER JOIN users guardian ON guardian.id = rr.guardian_user_id
+       INNER JOIN users child ON child.id = rr.child_user_id
+       WHERE rr.id = $1
+         AND rr.relationship_type = 'guardian_child'
+       LIMIT 1`,
+      [relationshipId]
+    );
+
+    return result.rows[0] ?? null;
   }
 
   private mapProfile(row: UserProfileRow): UserProfileDto {
@@ -3153,6 +3859,40 @@ export class SocialService {
     if (role !== 'parent') {
       throw new AppError(403, ErrorCodes.FORBIDDEN, 'Only parent/admin role can access report queue.');
     }
+  }
+
+  private mapRoomMember(row: RoomMemberProfileRow, ownerUserId: string): RoomMemberDto {
+    return {
+      userId: row.user_id,
+      name: normalizeName(row.display_name, row.email),
+      ...(row.avatar_url ? { avatarUri: row.avatar_url } : {}),
+      ...(row.alias?.trim() ? { alias: row.alias.trim() } : {}),
+      role: row.role,
+      isOwner: row.user_id === ownerUserId
+    };
+  }
+
+  private mapFamilyRoomRelationship(row: RoomRelationshipRow): FamilyRoomRelationshipDto {
+    return {
+      id: row.id,
+      guardianUserId: row.guardian_user_id,
+      guardianName: normalizeName(row.guardian_name, row.guardian_email),
+      childUserId: row.child_user_id,
+      childName: normalizeName(row.child_name, row.child_email),
+      createdAt: row.created_at.toISOString()
+    };
+  }
+
+  private mapFamilyRoomRelationshipRequest(row: RoomRelationshipRow): FamilyRoomRelationshipRequestDto {
+    return {
+      id: row.id,
+      guardianUserId: row.guardian_user_id,
+      guardianName: normalizeName(row.guardian_name, row.guardian_email),
+      childUserId: row.child_user_id,
+      childName: normalizeName(row.child_name, row.child_email),
+      ...(row.created_by ? { requestedByUserId: row.created_by } : {}),
+      createdAt: row.created_at.toISOString()
+    };
   }
 
   private emitToUsers(userIds: string[], payload: unknown): void {

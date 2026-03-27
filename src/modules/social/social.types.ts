@@ -34,12 +34,32 @@ export interface RoomDto {
   type: RoomType;
   title: string;
   members: string[];
+  ownerUserId: string;
   isGroup: boolean;
   favorite: boolean;
   muted: boolean;
   unread: number;
   preview?: string;
   updatedAt: string;
+}
+
+export interface RoomMemberDto {
+  userId: string;
+  name: string;
+  avatarUri?: string;
+  alias?: string;
+  role: 'admin' | 'member';
+  isOwner: boolean;
+}
+
+export interface RoomMemberListDto {
+  roomId: string;
+  ownerUserId: string;
+  myRole: 'admin' | 'member';
+  canTransferOwnership: boolean;
+  canManageAdmins: boolean;
+  canKickMembers: boolean;
+  items: RoomMemberDto[];
 }
 
 export interface RoomMessageDto {
@@ -54,4 +74,31 @@ export interface RoomMessageDto {
   delivery: MessageDelivery;
   unreadCount?: number;
   readByNames?: string[];
+}
+
+export interface FamilyRoomMemberProfileDto {
+  userId: string;
+  name: string;
+  avatarUri?: string;
+  alias?: string;
+}
+
+export interface FamilyRoomRelationshipDto {
+  id: string;
+  guardianUserId: string;
+  guardianName: string;
+  childUserId: string;
+  childName: string;
+  createdAt: string;
+}
+
+export interface FamilyRoomRelationshipRequestDto {
+  id: string;
+  guardianUserId: string;
+  guardianName: string;
+  childUserId: string;
+  childName: string;
+  requestedByUserId?: string;
+  requestedByName?: string;
+  createdAt: string;
 }
