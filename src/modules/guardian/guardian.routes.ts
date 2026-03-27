@@ -169,6 +169,52 @@ export async function guardianRoutes(app: FastifyInstance): Promise<void> {
   );
 
   app.get(
+    '/users/:userId/location',
+    {
+      ...guardianAuth,
+      schema: {
+        tags: ['guardian'],
+        summary: 'Get latest shared location for one user',
+        params: {
+          type: 'object',
+          required: ['userId'],
+          properties: {
+            userId: { type: 'string', format: 'uuid' }
+          }
+        }
+      }
+    },
+    async (request) => {
+      const params = request.params as { userId: string };
+      const data = await app.guardianService.getUserLocation(request.user.sub, params.userId);
+      return { success: true, data };
+    }
+  );
+
+  app.post(
+    '/users/:userId/location/refresh',
+    {
+      ...guardianAuth,
+      schema: {
+        tags: ['guardian'],
+        summary: 'Request one-time precise location refresh for one user',
+        params: {
+          type: 'object',
+          required: ['userId'],
+          properties: {
+            userId: { type: 'string', format: 'uuid' }
+          }
+        }
+      }
+    },
+    async (request) => {
+      const params = request.params as { userId: string };
+      const data = await app.guardianService.requestUserLocationRefresh(request.user.sub, params.userId);
+      return { success: true, data };
+    }
+  );
+
+  app.get(
     '/family-links',
     {
       ...guardianAuth,

@@ -9,6 +9,7 @@ export interface UserProfileDto {
   email: string;
   avatarUri?: string;
   locale?: string;
+  locationSharingEnabled?: boolean;
 }
 
 export interface FriendDto {
@@ -60,6 +61,22 @@ export interface RoomMemberListDto {
   canManageAdmins: boolean;
   canKickMembers: boolean;
   items: RoomMemberDto[];
+}
+
+export interface UserLocationDto {
+  userId: string;
+  latitude: number;
+  longitude: number;
+  accuracyM?: number;
+  capturedAt: string;
+  source: 'heartbeat' | 'precision_refresh' | 'manual_refresh';
+}
+
+export interface UserLocationRefreshRequestDto {
+  pending: boolean;
+  requestId?: string;
+  requestedAt?: string;
+  expiresAt?: string;
 }
 
 export interface RoomMessageDto {

@@ -104,7 +104,7 @@ export async function buildServer(): Promise<FastifyInstance> {
     logger: app.log
   });
   const familyService = new FamilyService(db, connectionManager, app.log);
-  const guardianService = new GuardianService(db, app.log);
+  const guardianService = new GuardianService(db, connectionManager, app.log);
   const botService = new BotService({
     db,
     socialService,

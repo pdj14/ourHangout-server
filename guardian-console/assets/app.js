@@ -89,6 +89,16 @@ const COPY = {
     no_users_matched: '조건에 맞는 사용자가 없습니다.',
     no_phone: '전화번호 없음',
     no_status: '상태 메시지 없음',
+    location_sharing_on: '위치 공유 ON',
+    location_sharing_off: '위치 공유 OFF',
+    latest_location_at: '최근 위치 {time}',
+    no_location_yet: '아직 위치 기록이 없어요.',
+    view_location: '위치 보기',
+    precise_refresh: '정확히 새로고침',
+    open_map: '지도 열기',
+    flash_location_disabled: '이 계정은 위치 공유가 꺼져 있어요.',
+    flash_location_missing: '아직 저장된 위치가 없어요.',
+    flash_precise_refresh_requested: '정확한 위치 새로고침을 요청했어요. 만료 시각: {time}',
     edit: '수정',
     revoke_sessions: '세션 종료',
     rooms_count: '{count}개 방',
@@ -290,6 +300,16 @@ const COPY = {
     no_users_matched: 'No users matched this filter.',
     no_phone: 'No phone set',
     no_status: 'No status message',
+    location_sharing_on: 'Location ON',
+    location_sharing_off: 'Location OFF',
+    latest_location_at: 'Last location {time}',
+    no_location_yet: 'No location yet.',
+    view_location: 'View location',
+    precise_refresh: 'Precise refresh',
+    open_map: 'Open map',
+    flash_location_disabled: 'Location sharing is disabled for this account.',
+    flash_location_missing: 'No location captured yet.',
+    flash_precise_refresh_requested: 'Precise refresh requested. Expires at {time}',
     edit: 'Edit',
     revoke_sessions: 'Revoke Sessions',
     rooms_count: '{count} rooms',
@@ -526,6 +546,7 @@ const state = {
   summary: null,
   familyLinks: [],
   users: [],
+  userLocations: {},
   rooms: [],
   selectedRoomId: null,
   roomMessages: {
@@ -797,6 +818,13 @@ async function loadUsers() {
     state.loading.users = false
     render()
   }
+}
+
+async function loadUserLocation(userId) {
+  const data = await apiRequest(`/v1/guardian/users/${userId}/location`)
+  state.userLocations[userId] = data
+  render()
+  return data
 }
 
 async function loadRooms() {
@@ -1212,12 +1240,20 @@ function renderUsers() {
                             <div class="stack muted">
                               <span>${user.locale || '-'}</span>
                               <span>${user.statusMessage ? escapeHtml(user.statusMessage) : escapeHtml(t('no_status'))}</span>
+                              <span>${escapeHtml(user.locationSharingEnabled ? t('location_sharing_on') : t('location_sharing_off'))}</span>
+                              <span>${user.latestLocationAt ? escapeHtml(t('latest_location_at', { time: formatDate(user.latestLocationAt) })) : escapeHtml(t('no_location_yet'))}</span>
                               <span>${formatDate(user.updatedAt)}</span>
                             </div>
                           </td>
                           <td>
                             <div class="button-row">
                               <button class="button secondary" type="button" data-edit-user="${escapeHtml(user.id)}">${escapeHtml(t('edit'))}</button>
+                              ${
+                                user.locationSharingEnabled
+                                  ? `<button class="button ghost" type="button" data-view-location="${escapeHtml(user.id)}">${escapeHtml(t('view_location'))}</button>
+                                     <button class="button ghost" type="button" data-refresh-location="${escapeHtml(user.id)}">${escapeHtml(t('precise_refresh'))}</button>`
+                                  : ''
+                              }
                               <button class="button danger" type="button" data-revoke-user="${escapeHtml(user.id)}">${escapeHtml(t('revoke_sessions'))}</button>
                             </div>
                           </td>
@@ -1278,6 +1314,26 @@ function renderUsers() {
                   <button class="button ghost" type="button" data-action="cancel-edit">${escapeHtml(t('cancel'))}</button>
                 </div>
               </form>
+              ${
+                state.userLocations[draft.id]
+                  ? `<div class="panel" style="padding:16px; margin-top:12px">
+                      <h4 style="margin:0 0 8px">Location</h4>
+                      <div class="stack muted">
+                        <span>Sharing: ${state.userLocations[draft.id].sharingEnabled ? 'ON' : 'OFF'}</span>
+                        ${
+                          state.userLocations[draft.id].location
+                            ? `<span>${escapeHtml(String(state.userLocations[draft.id].location.latitude))}, ${escapeHtml(String(state.userLocations[draft.id].location.longitude))}</span>
+                               <span>${escapeHtml(formatDate(state.userLocations[draft.id].location.capturedAt))}</span>
+                               <span>${escapeHtml(state.userLocations[draft.id].location.source)}</span>
+                               <div class="button-row">
+                                 <button class="button ghost" type="button" data-open-location="${escapeHtml(draft.id)}">${escapeHtml(t('open_map'))}</button>
+                               </div>`
+                            : `<span>${escapeHtml(t('no_location_yet'))}</span>`
+                        }
+                      </div>
+                    </div>`
+                  : ''
+              }
             </section>
           `
           : ''
@@ -1909,7 +1965,7 @@ async function refreshCurrentTab() {
 
 app.addEventListener('click', async (event) => {
   const target = event.target.closest(
-    '[data-tab],[data-action],[data-set-locale],[data-edit-user],[data-revoke-user],[data-select-room],[data-delete-message],[data-delete-asset],[data-delete-release]'
+    '[data-tab],[data-action],[data-set-locale],[data-edit-user],[data-revoke-user],[data-select-room],[data-delete-message],[data-delete-asset],[data-delete-release],[data-view-location],[data-refresh-location],[data-open-location]'
   )
   if (!target) return
 
@@ -1939,6 +1995,38 @@ app.addEventListener('click', async (event) => {
         method: 'POST'
       })
       setFlash('info', result.revoked ? t('flash_sessions_revoked') : t('flash_no_active_sessions'))
+      return
+    }
+
+    if (target.dataset.viewLocation) {
+      startEditUser(target.dataset.viewLocation)
+      const result = await loadUserLocation(target.dataset.viewLocation)
+      if (!result.sharingEnabled) {
+        setFlash('info', t('flash_location_disabled'))
+        return
+      }
+      if (result.location) {
+        render()
+      } else {
+        setFlash('info', t('flash_location_missing'))
+      }
+      return
+    }
+
+    if (target.dataset.refreshLocation) {
+      const result = await apiRequest(`/v1/guardian/users/${target.dataset.refreshLocation}/location/refresh`, {
+        method: 'POST'
+      })
+      setFlash('info', t('flash_precise_refresh_requested', { time: formatDate(result.expiresAt) }))
+      return
+    }
+
+    if (target.dataset.openLocation) {
+      const payload = state.userLocations[target.dataset.openLocation]
+      if (payload?.location) {
+        const { latitude, longitude } = payload.location
+        window.open(`https://www.google.com/maps/search/?api=1&query=${latitude},${longitude}`, '_blank', 'noopener')
+      }
       return
     }
 
