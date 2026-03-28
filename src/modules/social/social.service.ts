@@ -307,6 +307,23 @@ function getFriendPushCopy(
   return { title: 'Friend request declined', body: 'Check the status in your Friends tab.' };
 }
 
+function getRoomInvitationPushCopy(
+  locale?: string | null,
+  roomTitle?: string | null
+): { title: string; body: string } {
+  const safeRoomTitle = roomTitle?.trim();
+  if (isKoreanLocale(locale)) {
+    return {
+      title: '가족방 초대가 도착했어요',
+      body: safeRoomTitle ? `${safeRoomTitle} 초대를 확인해 보세요.` : '친구 탭에서 방 초대를 확인해 보세요.',
+    };
+  }
+  return {
+    title: 'New room invitation',
+    body: safeRoomTitle ? `Check the invitation to ${safeRoomTitle}.` : 'Check the room invite in your Friends tab.',
+  };
+}
+
 function makeSystemMessageToken(type: 'member_left', displayName: string): string {
   return `__sys__:${type}:${encodeURIComponent(displayName)}`;
 }
@@ -1885,13 +1902,25 @@ export class SocialService {
       );
 
       const invitation = created.rows[0];
-      this.emitToUsers([params.userId, targetUserId], {
+      const realtimePayload = {
         event: 'room.invitation.updated',
         data: {
           roomId: params.roomId,
           invitationId: invitation.id
         }
-      });
+      };
+      this.connectionManager.sendToUser(params.userId, realtimePayload);
+      const delivered = this.connectionManager.sendToUser(targetUserId, realtimePayload);
+      if (!delivered) {
+        await this.sendPushToUsers({
+          userIds: [targetUserId],
+          resolveCopy: (locale) => getRoomInvitationPushCopy(locale, membership.title),
+          data: {
+            type: 'room.invitation',
+            invitationId: invitation.id
+          }
+        });
+      }
       return this.mapRoomInvitation(invitation);
     } catch (error) {
       if ((error as { code?: string }).code === '23505') {
