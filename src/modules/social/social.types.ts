@@ -63,6 +63,25 @@ export interface RoomMemberListDto {
   items: RoomMemberDto[];
 }
 
+export interface RoomInvitationDto {
+  id: string;
+  roomId: string;
+  roomType: RoomType;
+  roomTitle: string;
+  inviterUserId: string;
+  inviterName: string;
+  inviterAvatarUri?: string;
+  targetUserId: string;
+  targetName: string;
+  status: 'pending' | 'accepted' | 'rejected' | 'canceled' | 'expired';
+  createdAt: string;
+}
+
+export interface RoomInvitationListDto {
+  incoming: RoomInvitationDto[];
+  outgoing: RoomInvitationDto[];
+}
+
 export interface UserLocationDto {
   userId: string;
   latitude: number;

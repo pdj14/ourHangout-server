@@ -13,6 +13,8 @@ import type {
   FamilyRoomRelationshipDto,
   FamilyRoomRelationshipRequestDto,
   MessageKind,
+  RoomInvitationDto,
+  RoomInvitationListDto,
   RoomMemberDto,
   RoomMemberListDto,
   RoomDto,
@@ -119,6 +121,22 @@ type RoomMemberProfileRow = {
   alias: string | null;
   location_sharing_enabled: boolean | null;
   joined_at: Date;
+};
+
+type RoomInvitationRow = {
+  id: string;
+  room_id: string;
+  room_type: RoomType;
+  room_title: string | null;
+  inviter_user_id: string;
+  inviter_name: string | null;
+  inviter_email: string;
+  inviter_avatar_url: string | null;
+  target_user_id: string;
+  target_name: string | null;
+  target_email: string;
+  status: 'pending' | 'accepted' | 'rejected' | 'canceled' | 'expired';
+  created_at: Date;
 };
 
 type RoomRelationshipRow = {
@@ -1741,6 +1759,283 @@ export class SocialService {
       canManageAdmins: membership.created_by === params.userId,
       canKickMembers: membership.created_by === params.userId || membership.member_role === 'admin',
       items: result.rows.map((row) => this.mapRoomMember(row, membership.created_by))
+    };
+  }
+
+  async listRoomInvitations(userId: string): Promise<RoomInvitationListDto> {
+    const result = await this.db.query<RoomInvitationRow>(
+      `SELECT fri.id,
+              fri.room_id,
+              r.type AS room_type,
+              r.title AS room_title,
+              fri.inviter_user_id,
+              inviter.display_name AS inviter_name,
+              inviter.email AS inviter_email,
+              inviter.avatar_url AS inviter_avatar_url,
+              fri.target_user_id,
+              target.display_name AS target_name,
+              target.email AS target_email,
+              fri.status,
+              fri.created_at
+       FROM family_room_invitations fri
+       INNER JOIN rooms r ON r.id = fri.room_id
+       INNER JOIN users inviter ON inviter.id = fri.inviter_user_id
+       INNER JOIN users target ON target.id = fri.target_user_id
+       WHERE fri.status = 'pending'
+         AND r.deleted_at IS NULL
+         AND r.type IN ('group', 'family')
+         AND (fri.inviter_user_id = $1 OR fri.target_user_id = $1)
+       ORDER BY fri.created_at DESC`,
+      [userId]
+    );
+
+    const incoming: RoomInvitationDto[] = [];
+    const outgoing: RoomInvitationDto[] = [];
+    for (const row of result.rows) {
+      const mapped = this.mapRoomInvitation(row);
+      if (row.target_user_id === userId) {
+        incoming.push(mapped);
+      } else {
+        outgoing.push(mapped);
+      }
+    }
+
+    return { incoming, outgoing };
+  }
+
+  async createRoomInvitation(params: {
+    userId: string;
+    roomId: string;
+    targetUserId: string;
+  }): Promise<RoomInvitationDto> {
+    const membership = await this.getRoomMembership(params.roomId, params.userId);
+    this.assertSharedRoom(membership);
+
+    const targetUserId = params.targetUserId.trim();
+    if (!targetUserId) {
+      throw new AppError(400, ErrorCodes.VALIDATION_ERROR, 'Target user id is required.');
+    }
+    if (targetUserId === params.userId) {
+      throw new AppError(409, ErrorCodes.CONFLICT, 'You cannot invite yourself to this room.');
+    }
+
+    const inviterProfile = await this.getUserProfileRow(params.userId);
+    const targetProfile = await this.getUserProfileRow(targetUserId);
+    if (await this.isActiveRoomMember(params.roomId, targetUserId)) {
+      throw new AppError(409, ErrorCodes.CONFLICT, 'Target user is already in this room.');
+    }
+
+    const friendIds = new Set(await this.getFriendUserIds(params.userId));
+    if (!friendIds.has(targetUserId)) {
+      throw new AppError(403, ErrorCodes.FORBIDDEN, 'Room invitations require an existing friend relationship.');
+    }
+
+    const existingPending = await this.db.query<{ id: string }>(
+      `SELECT id
+       FROM family_room_invitations
+       WHERE room_id = $1
+         AND target_user_id = $2
+         AND status = 'pending'
+       LIMIT 1`,
+      [params.roomId, targetUserId]
+    );
+    if (existingPending.rows[0]?.id) {
+      throw new AppError(409, ErrorCodes.CONFLICT, 'A pending room invitation already exists.');
+    }
+
+    try {
+      const created = await this.db.query<RoomInvitationRow>(
+        `INSERT INTO family_room_invitations (
+           room_id,
+           inviter_user_id,
+           target_user_id,
+           status,
+           note,
+           created_at,
+           updated_at,
+           responded_at,
+           expires_at
+         )
+         VALUES ($1, $2, $3, 'pending', NULL, NOW(), NOW(), NULL, NULL)
+         RETURNING id,
+                   room_id,
+                   $4::text AS room_type,
+                   $5::text AS room_title,
+                   inviter_user_id,
+                   $6::text AS inviter_name,
+                   $7::text AS inviter_email,
+                   $8::text AS inviter_avatar_url,
+                   target_user_id,
+                   $9::text AS target_name,
+                   $10::text AS target_email,
+                   status,
+                   created_at`,
+        [
+          params.roomId,
+          params.userId,
+          targetUserId,
+          membership.type,
+          membership.title,
+          inviterProfile.display_name,
+          inviterProfile.email,
+          inviterProfile.avatar_url,
+          targetProfile.display_name,
+          targetProfile.email,
+        ]
+      );
+
+      const invitation = created.rows[0];
+      this.emitToUsers([params.userId, targetUserId], {
+        event: 'room.invitation.updated',
+        data: {
+          roomId: params.roomId,
+          invitationId: invitation.id
+        }
+      });
+      return this.mapRoomInvitation(invitation);
+    } catch (error) {
+      if ((error as { code?: string }).code === '23505') {
+        throw new AppError(409, ErrorCodes.CONFLICT, 'A pending room invitation already exists.');
+      }
+      throw error;
+    }
+  }
+
+  async acceptRoomInvitation(params: {
+    userId: string;
+    invitationId: string;
+  }): Promise<{ invitationId: string; roomId: string; joined: true }> {
+    const invitationId = params.invitationId.trim();
+    if (!invitationId) {
+      throw new AppError(400, ErrorCodes.VALIDATION_ERROR, 'Invitation id is required.');
+    }
+
+    const client = await this.db.connect();
+    let roomId = '';
+    let inviterUserId = '';
+    try {
+      await client.query('BEGIN');
+      const invitation = await this.getPendingRoomInvitation(invitationId, client);
+      if (invitation.target_user_id !== params.userId) {
+        throw new AppError(403, ErrorCodes.FORBIDDEN, 'Only the invited member can accept this room invitation.');
+      }
+
+      const room = await this.getSharedRoomRow(invitation.room_id, client);
+      roomId = room.id;
+      inviterUserId = invitation.inviter_user_id;
+
+      await client.query(
+        `UPDATE family_room_invitations
+         SET status = 'accepted',
+             responded_at = NOW(),
+             updated_at = NOW()
+         WHERE id = $1`,
+        [invitationId]
+      );
+
+      await client.query(
+        `INSERT INTO room_members (room_id, user_id, role, joined_at, left_at)
+         VALUES ($1, $2, 'member', NOW(), NULL)
+         ON CONFLICT (room_id, user_id)
+         DO UPDATE SET
+           role = 'member',
+           left_at = NULL`,
+        [roomId, params.userId]
+      );
+
+      await client.query(
+        `INSERT INTO room_user_settings (room_id, user_id, favorite, muted, created_at, updated_at)
+         VALUES ($1, $2, FALSE, FALSE, NOW(), NOW())
+         ON CONFLICT (room_id, user_id)
+         DO UPDATE SET
+           hidden_at = NULL,
+           updated_at = NOW()`,
+        [roomId, params.userId]
+      );
+
+      await client.query(
+        `UPDATE rooms
+         SET updated_at = NOW()
+         WHERE id = $1`,
+        [roomId]
+      );
+
+      await client.query('COMMIT');
+    } catch (error) {
+      await client.query('ROLLBACK');
+      throw error;
+    } finally {
+      client.release();
+    }
+
+    const activeMemberIds = await this.getActiveRoomMemberIds(roomId);
+    this.emitToUsers(activeMemberIds, {
+      event: 'room.updated',
+      data: { roomId }
+    });
+    this.emitToUsers([params.userId, inviterUserId], {
+      event: 'room.invitation.updated',
+      data: {
+        roomId,
+        invitationId
+      }
+    });
+
+    return {
+      invitationId,
+      roomId,
+      joined: true
+    };
+  }
+
+  async rejectRoomInvitation(params: {
+    userId: string;
+    invitationId: string;
+  }): Promise<{ invitationId: string; rejected: true }> {
+    const invitationId = params.invitationId.trim();
+    if (!invitationId) {
+      throw new AppError(400, ErrorCodes.VALIDATION_ERROR, 'Invitation id is required.');
+    }
+
+    const client = await this.db.connect();
+    let inviterUserId = '';
+    let roomId = '';
+    try {
+      await client.query('BEGIN');
+      const invitation = await this.getPendingRoomInvitation(invitationId, client);
+      if (invitation.target_user_id !== params.userId) {
+        throw new AppError(403, ErrorCodes.FORBIDDEN, 'Only the invited member can reject this room invitation.');
+      }
+
+      inviterUserId = invitation.inviter_user_id;
+      roomId = invitation.room_id;
+      await client.query(
+        `UPDATE family_room_invitations
+         SET status = 'rejected',
+             responded_at = NOW(),
+             updated_at = NOW()
+         WHERE id = $1`,
+        [invitationId]
+      );
+      await client.query('COMMIT');
+    } catch (error) {
+      await client.query('ROLLBACK');
+      throw error;
+    } finally {
+      client.release();
+    }
+
+    this.emitToUsers([params.userId, inviterUserId], {
+      event: 'room.invitation.updated',
+      data: {
+        roomId,
+        invitationId
+      }
+    });
+
+    return {
+      invitationId,
+      rejected: true
     };
   }
 
@@ -3673,6 +3968,80 @@ export class SocialService {
     }
   }
 
+  private async isActiveRoomMember(roomId: string, userId: string, client?: PoolClient): Promise<boolean> {
+    const executor = client ?? this.db;
+    const result = await executor.query<{ exists: boolean }>(
+      `SELECT EXISTS(
+         SELECT 1
+         FROM room_members
+         WHERE room_id = $1
+           AND user_id = $2
+           AND left_at IS NULL
+       ) AS exists`,
+      [roomId, userId]
+    );
+    return result.rows[0]?.exists ?? false;
+  }
+
+  private async getSharedRoomRow(roomId: string, client?: PoolClient): Promise<RoomRow> {
+    const executor = client ?? this.db;
+    const result = await executor.query<RoomRow>(
+      `SELECT id,
+              type,
+              title,
+              created_by,
+              created_at,
+              updated_at,
+              deleted_at
+       FROM rooms
+       WHERE id = $1
+         AND deleted_at IS NULL
+         AND type IN ('group', 'family')
+       LIMIT 1`,
+      [roomId]
+    );
+    const row = result.rows[0];
+    if (!row) {
+      throw new AppError(404, ErrorCodes.RESOURCE_NOT_FOUND, 'Shared room not found.');
+    }
+    return row;
+  }
+
+  private async getPendingRoomInvitation(invitationId: string, client?: PoolClient): Promise<RoomInvitationRow> {
+    const executor = client ?? this.db;
+    const result = await executor.query<RoomInvitationRow>(
+      `SELECT fri.id,
+              fri.room_id,
+              r.type AS room_type,
+              r.title AS room_title,
+              fri.inviter_user_id,
+              inviter.display_name AS inviter_name,
+              inviter.email AS inviter_email,
+              inviter.avatar_url AS inviter_avatar_url,
+              fri.target_user_id,
+              target.display_name AS target_name,
+              target.email AS target_email,
+              fri.status,
+              fri.created_at
+       FROM family_room_invitations fri
+       INNER JOIN rooms r ON r.id = fri.room_id
+       INNER JOIN users inviter ON inviter.id = fri.inviter_user_id
+       INNER JOIN users target ON target.id = fri.target_user_id
+       WHERE fri.id = $1
+         AND fri.status = 'pending'
+         AND r.deleted_at IS NULL
+         AND r.type IN ('group', 'family')
+       LIMIT 1
+       FOR UPDATE`,
+      [invitationId]
+    );
+    const row = result.rows[0];
+    if (!row) {
+      throw new AppError(404, ErrorCodes.RESOURCE_NOT_FOUND, 'Pending room invitation not found.');
+    }
+    return row;
+  }
+
   private async assertRoomMembership(roomId: string, userId: string, client?: PoolClient): Promise<RoomRow> {
     const membership = await this.getRoomMembership(roomId, userId, client);
     return {
@@ -4223,6 +4592,22 @@ export class SocialService {
       ...(row.alias?.trim() ? { alias: row.alias.trim() } : {}),
       role: row.role,
       isOwner: row.user_id === ownerUserId
+    };
+  }
+
+  private mapRoomInvitation(row: RoomInvitationRow): RoomInvitationDto {
+    return {
+      id: row.id,
+      roomId: row.room_id,
+      roomType: row.room_type,
+      roomTitle: (row.room_title || '').trim(),
+      inviterUserId: row.inviter_user_id,
+      inviterName: normalizeName(row.inviter_name, row.inviter_email),
+      ...(row.inviter_avatar_url ? { inviterAvatarUri: row.inviter_avatar_url } : {}),
+      targetUserId: row.target_user_id,
+      targetName: normalizeName(row.target_name, row.target_email),
+      status: row.status,
+      createdAt: row.created_at.toISOString()
     };
   }
 
