@@ -98,6 +98,7 @@ export interface FamilyRoomMemberProfileDto {
   name: string;
   avatarUri?: string;
   alias?: string;
+  locationSharingEnabled?: boolean;
 }
 
 export interface FamilyRoomRelationshipDto {
