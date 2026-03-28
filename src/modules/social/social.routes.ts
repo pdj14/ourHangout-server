@@ -572,6 +572,108 @@ export async function socialRoutes(app: FastifyInstance): Promise<void> {
     }
   );
 
+  app.get(
+    '/room-invitations',
+    {
+      preHandler: app.authenticate,
+      schema: {
+        tags: ['social'],
+        summary: 'List pending incoming/outgoing shared room invitations'
+      }
+    },
+    async (request) => {
+      const data = await app.socialService.listRoomInvitations(request.user.sub);
+      return { success: true, data };
+    }
+  );
+
+  app.post(
+    '/rooms/:roomId/invitations',
+    {
+      preHandler: app.authenticate,
+      schema: {
+        tags: ['social'],
+        summary: 'Create a shared room invitation',
+        params: {
+          type: 'object',
+          required: ['roomId'],
+          properties: {
+            roomId: { type: 'string', format: 'uuid' }
+          }
+        },
+        body: {
+          type: 'object',
+          required: ['targetUserId'],
+          properties: {
+            targetUserId: { type: 'string', format: 'uuid' }
+          }
+        }
+      }
+    },
+    async (request) => {
+      const params = request.params as { roomId: string };
+      const body = request.body as { targetUserId: string };
+      const data = await app.socialService.createRoomInvitation({
+        userId: request.user.sub,
+        roomId: params.roomId,
+        targetUserId: body.targetUserId
+      });
+      return { success: true, data };
+    }
+  );
+
+  app.post(
+    '/room-invitations/:invitationId/accept',
+    {
+      preHandler: app.authenticate,
+      schema: {
+        tags: ['social'],
+        summary: 'Accept a shared room invitation',
+        params: {
+          type: 'object',
+          required: ['invitationId'],
+          properties: {
+            invitationId: { type: 'string', format: 'uuid' }
+          }
+        }
+      }
+    },
+    async (request) => {
+      const params = request.params as { invitationId: string };
+      const data = await app.socialService.acceptRoomInvitation({
+        userId: request.user.sub,
+        invitationId: params.invitationId
+      });
+      return { success: true, data };
+    }
+  );
+
+  app.post(
+    '/room-invitations/:invitationId/reject',
+    {
+      preHandler: app.authenticate,
+      schema: {
+        tags: ['social'],
+        summary: 'Reject a shared room invitation',
+        params: {
+          type: 'object',
+          required: ['invitationId'],
+          properties: {
+            invitationId: { type: 'string', format: 'uuid' }
+          }
+        }
+      }
+    },
+    async (request) => {
+      const params = request.params as { invitationId: string };
+      const data = await app.socialService.rejectRoomInvitation({
+        userId: request.user.sub,
+        invitationId: params.invitationId
+      });
+      return { success: true, data };
+    }
+  );
+
   app.post(
     '/rooms/:roomId/transfer-ownership',
     {
