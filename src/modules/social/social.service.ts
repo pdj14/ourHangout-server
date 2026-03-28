@@ -3532,6 +3532,22 @@ export class SocialService {
          updated_at = NOW()`,
       [params.userId, params.platform, pushToken]
     );
+    const tokenCount = await this.db.query<{ count: string }>(
+      `SELECT COUNT(*)::text AS count
+       FROM device_tokens
+       WHERE user_id = $1`,
+      [params.userId]
+    );
+    this.logger.info(
+      {
+        tag: 'push_token.registered',
+        userId: params.userId,
+        platform: params.platform,
+        pushTokenSuffix: pushToken.slice(-12),
+        tokenCount: Number(tokenCount.rows[0]?.count || '0')
+      },
+      'Push token registered'
+    );
 
     return {
       registered: true,
@@ -3541,11 +3557,20 @@ export class SocialService {
   }
 
   async removePushToken(params: { userId: string; pushToken: string }): Promise<{ removed: boolean }> {
-    await this.db.query(
+    const result = await this.db.query(
       `DELETE FROM device_tokens
        WHERE user_id = $1
          AND push_token = $2`,
       [params.userId, params.pushToken]
+    );
+    this.logger.info(
+      {
+        tag: 'push_token.removed',
+        userId: params.userId,
+        pushTokenSuffix: params.pushToken.slice(-12),
+        removedCount: result.rowCount || 0
+      },
+      'Push token removed'
     );
 
     return {
