@@ -731,6 +731,20 @@ export class SocialService {
       roomId: params.roomId
     });
 
+    this.logger.info(
+      {
+        tag: 'location_refresh.requested',
+        roomId: params.roomId,
+        requesterUserId: params.userId,
+        targetUserId,
+        requestedAt: request.requested_at.toISOString(),
+        expiresAt: request.expires_at.toISOString(),
+        requestTokenHashPrefix: hashLocationRequestToken(requestToken).slice(0, 12),
+        backendBaseUrl: (params.backendBaseUrl || '').trim()
+      },
+      'Location precision refresh requested'
+    );
+
     this.connectionManager.sendToUser(targetUserId, {
       event: 'location.precision.requested',
       data: {
@@ -748,6 +762,16 @@ export class SocialService {
          WHERE user_id = $1`,
         [targetUserId]
       );
+      this.logger.info(
+        {
+          tag: 'location_refresh.push.prepare',
+          roomId: params.roomId,
+          targetUserId,
+          pushTokenCount: pushTokens.rows.length,
+          requestTokenHashPrefix: hashLocationRequestToken(requestToken).slice(0, 12)
+        },
+        'Preparing location refresh push'
+      );
       const result = await this.pushService.send({
         tokens: pushTokens.rows.map((row) => row.push_token),
         data: {
@@ -759,9 +783,29 @@ export class SocialService {
         },
         headless: true
       });
+      this.logger.info(
+        {
+          tag: 'location_refresh.push.result',
+          roomId: params.roomId,
+          targetUserId,
+          sentCount: result.sentCount,
+          invalidTokens: result.invalidTokens,
+          requestTokenHashPrefix: hashLocationRequestToken(requestToken).slice(0, 12)
+        },
+        'Location refresh push send result'
+      );
       if (result.invalidTokens.length > 0) {
         await this.db.query('DELETE FROM device_tokens WHERE push_token = ANY($1::text[])', [result.invalidTokens]);
       }
+    } else {
+      this.logger.warn(
+        {
+          tag: 'location_refresh.push.disabled',
+          roomId: params.roomId,
+          targetUserId
+        },
+        'Push service disabled for location refresh request'
+      );
     }
 
     return {
@@ -816,8 +860,29 @@ export class SocialService {
 
     const row = request.rows[0];
     if (!row) {
+      this.logger.warn(
+        {
+          tag: 'location_refresh.consume.invalid',
+          requestTokenHashPrefix: requestTokenHash.slice(0, 12)
+        },
+        'Location precision consume rejected due to invalid or expired token'
+      );
       throw new AppError(401, ErrorCodes.AUTH_UNAUTHORIZED, 'Location request token is invalid or expired.');
     }
+
+    this.logger.info(
+      {
+        tag: 'location_refresh.consume.start',
+        targetUserId: row.user_id,
+        requestedByUserId: row.requested_by_user_id,
+        roomId: row.room_id,
+        requestTokenHashPrefix: requestTokenHash.slice(0, 12),
+        requestedAt: row.requested_at.toISOString(),
+        expiresAt: row.expires_at.toISOString(),
+        source: params.source || 'precision_refresh'
+      },
+      'Location precision consume started'
+    );
 
     await this.upsertUserLocationSettings(row.user_id, true);
 
@@ -854,6 +919,19 @@ export class SocialService {
          AND request_token_hash = $2
          AND consumed_at IS NULL`,
       [row.user_id, requestTokenHash]
+    );
+
+    this.logger.info(
+      {
+        tag: 'location_refresh.consume.success',
+        targetUserId: row.user_id,
+        requestedByUserId: row.requested_by_user_id,
+        roomId: row.room_id,
+        requestTokenHashPrefix: requestTokenHash.slice(0, 12),
+        capturedAt: result.rows[0].captured_at.toISOString(),
+        source
+      },
+      'Location precision consume completed'
     );
 
     return this.mapUserLocation(result.rows[0]);
