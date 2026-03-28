@@ -1123,10 +1123,53 @@ export async function socialRoutes(app: FastifyInstance): Promise<void> {
     },
     async (request) => {
       const params = request.params as { roomId: string; targetUserId: string };
+      const backendBaseUrl = `${request.protocol}://${request.headers.host || ''}`.replace(/\/+$/, '');
       const data = await app.socialService.requestFamilyRoomLocationRefresh({
         userId: request.user.sub,
         roomId: params.roomId,
-        targetUserId: params.targetUserId
+        targetUserId: params.targetUserId,
+        backendBaseUrl
+      });
+      return { success: true, data };
+    }
+  );
+
+  app.post(
+    '/location-precision/consume',
+    {
+      schema: {
+        tags: ['social'],
+        summary: 'Consume a one-time location precision request token and upload location',
+        body: {
+          type: 'object',
+          required: ['requestToken', 'latitude', 'longitude'],
+          properties: {
+            requestToken: { type: 'string', minLength: 16, maxLength: 512 },
+            latitude: { type: 'number' },
+            longitude: { type: 'number' },
+            accuracyM: { type: 'number', minimum: 0 },
+            capturedAt: { type: 'string' },
+            source: { type: 'string', enum: ['precision_refresh', 'manual_refresh'] }
+          }
+        }
+      }
+    },
+    async (request) => {
+      const body = request.body as {
+        requestToken: string;
+        latitude: number;
+        longitude: number;
+        accuracyM?: number;
+        capturedAt?: string;
+        source?: 'precision_refresh' | 'manual_refresh';
+      };
+      const data = await app.socialService.completeLocationPrecisionRequest({
+        requestToken: body.requestToken,
+        latitude: body.latitude,
+        longitude: body.longitude,
+        accuracyM: body.accuracyM,
+        capturedAt: body.capturedAt,
+        source: body.source
       });
       return { success: true, data };
     }

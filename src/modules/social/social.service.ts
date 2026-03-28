@@ -1,4 +1,4 @@
-import { randomUUID } from 'crypto';
+import { createHash, randomBytes, randomUUID } from 'crypto';
 import { promises as fs } from 'fs';
 import type { FastifyBaseLogger } from 'fastify';
 import { dirname, relative, resolve } from 'path';
@@ -238,6 +238,7 @@ type UserLocationPrecisionRequestRow = {
   requested_at: Date;
   expires_at: Date;
   consumed_at: Date | null;
+  request_token_hash: string | null;
 };
 
 type FamilyRoomLocationRow = {
@@ -322,6 +323,14 @@ function getRoomInvitationPushCopy(
     title: 'New room invitation',
     body: safeRoomTitle ? `Check the invitation to ${safeRoomTitle}.` : 'Check the room invite in your Friends tab.',
   };
+}
+
+function createLocationRequestToken(): string {
+  return randomBytes(32).toString('base64url');
+}
+
+function hashLocationRequestToken(token: string): string {
+  return createHash('sha256').update(token).digest('hex');
 }
 
 function makeSystemMessageToken(type: 'member_left', displayName: string): string {
@@ -688,6 +697,7 @@ export class SocialService {
     userId: string;
     roomId: string;
     targetUserId: string;
+    backendBaseUrl?: string;
   }): Promise<UserLocationRefreshRequestDto> {
     const membership = await this.getRoomMembership(params.roomId, params.userId);
     this.assertFamilyRoom(membership);
@@ -714,7 +724,7 @@ export class SocialService {
       throw new AppError(403, ErrorCodes.FORBIDDEN, 'You do not have access to request this member location.');
     }
 
-    const request = await this.upsertLocationPrecisionRequest({
+    const { request, requestToken } = await this.upsertLocationPrecisionRequest({
       userId: targetUserId,
       requestedByKind: 'guardian_app',
       requestedByUserId: params.userId,
@@ -725,7 +735,9 @@ export class SocialService {
       event: 'location.precision.requested',
       data: {
         requestedAt: request.requested_at.toISOString(),
-        expiresAt: request.expires_at.toISOString()
+        expiresAt: request.expires_at.toISOString(),
+        requestToken,
+        backendBaseUrl: (params.backendBaseUrl || '').trim()
       }
     });
 
@@ -740,7 +752,10 @@ export class SocialService {
         tokens: pushTokens.rows.map((row) => row.push_token),
         data: {
           locationAction: 'refresh',
-          requestedAt: request.requested_at.toISOString()
+          requestedAt: request.requested_at.toISOString(),
+          expiresAt: request.expires_at.toISOString(),
+          requestToken,
+          backendBaseUrl: (params.backendBaseUrl || '').trim()
         },
         headless: true
       });
@@ -755,6 +770,93 @@ export class SocialService {
       requestedAt: request.requested_at.toISOString(),
       expiresAt: request.expires_at.toISOString()
     };
+  }
+
+  async completeLocationPrecisionRequest(params: {
+    requestToken: string;
+    latitude: number;
+    longitude: number;
+    accuracyM?: number | null;
+    capturedAt?: string;
+    source?: 'precision_refresh' | 'manual_refresh';
+  }): Promise<UserLocationDto> {
+    const requestToken = params.requestToken.trim();
+    if (!requestToken) {
+      throw new AppError(400, ErrorCodes.VALIDATION_ERROR, 'Location request token is required.');
+    }
+    if (!Number.isFinite(params.latitude) || !Number.isFinite(params.longitude)) {
+      throw new AppError(400, ErrorCodes.VALIDATION_ERROR, 'Latitude and longitude are required.');
+    }
+    if (params.latitude < -90 || params.latitude > 90 || params.longitude < -180 || params.longitude > 180) {
+      throw new AppError(400, ErrorCodes.VALIDATION_ERROR, 'Latitude or longitude is out of range.');
+    }
+
+    const capturedAt = params.capturedAt ? new Date(params.capturedAt) : new Date();
+    if (Number.isNaN(capturedAt.getTime())) {
+      throw new AppError(400, ErrorCodes.VALIDATION_ERROR, 'capturedAt is invalid.');
+    }
+
+    const requestTokenHash = hashLocationRequestToken(requestToken);
+    const request = await this.db.query<UserLocationPrecisionRequestRow>(
+      `SELECT user_id,
+              requested_by_user_id,
+              requested_by_kind,
+              room_id,
+              requested_at,
+              expires_at,
+              consumed_at,
+              request_token_hash
+       FROM user_location_precision_requests
+       WHERE request_token_hash = $1
+         AND consumed_at IS NULL
+         AND expires_at > NOW()
+       LIMIT 1`,
+      [requestTokenHash]
+    );
+
+    const row = request.rows[0];
+    if (!row) {
+      throw new AppError(401, ErrorCodes.AUTH_UNAUTHORIZED, 'Location request token is invalid or expired.');
+    }
+
+    await this.upsertUserLocationSettings(row.user_id, true);
+
+    const source = params.source === 'manual_refresh' ? 'manual_refresh' : 'precision_refresh';
+    const result = await this.db.query<UserLocationLatestRow>(
+      `INSERT INTO user_location_latest (
+         user_id,
+         latitude,
+         longitude,
+         accuracy_m,
+         captured_at,
+         source,
+         created_at,
+         updated_at
+       )
+       VALUES ($1, $2, $3, $4, $5, $6, NOW(), NOW())
+       ON CONFLICT (user_id)
+       DO UPDATE SET
+         latitude = EXCLUDED.latitude,
+         longitude = EXCLUDED.longitude,
+         accuracy_m = EXCLUDED.accuracy_m,
+         captured_at = EXCLUDED.captured_at,
+         source = EXCLUDED.source,
+         updated_at = NOW()
+       RETURNING user_id, latitude, longitude, accuracy_m, captured_at, source`,
+      [row.user_id, params.latitude, params.longitude, params.accuracyM ?? null, capturedAt, source]
+    );
+
+    await this.db.query(
+      `UPDATE user_location_precision_requests
+       SET consumed_at = NOW(),
+           updated_at = NOW()
+       WHERE user_id = $1
+         AND request_token_hash = $2
+         AND consumed_at IS NULL`,
+      [row.user_id, requestTokenHash]
+    );
+
+    return this.mapUserLocation(result.rows[0]);
   }
 
   async issueAvatarUploadUrl(
@@ -4246,7 +4348,8 @@ export class SocialService {
               room_id,
               requested_at,
               expires_at,
-              consumed_at
+              consumed_at,
+              request_token_hash
        FROM user_location_precision_requests
        WHERE user_id = $1
          AND consumed_at IS NULL
@@ -4263,8 +4366,10 @@ export class SocialService {
     requestedByKind: 'guardian_app' | 'guardian_console';
     requestedByUserId?: string | null;
     roomId?: string | null;
-  }): Promise<UserLocationPrecisionRequestRow> {
+  }): Promise<{ request: UserLocationPrecisionRequestRow; requestToken: string }> {
     const expiresAt = new Date(Date.now() + 3 * 60 * 1000);
+    const requestToken = createLocationRequestToken();
+    const requestTokenHash = hashLocationRequestToken(requestToken);
     const result = await this.db.query<UserLocationPrecisionRequestRow>(
       `INSERT INTO user_location_precision_requests (
          user_id,
@@ -4273,11 +4378,12 @@ export class SocialService {
          room_id,
          requested_at,
          expires_at,
-         consumed_at,
+          consumed_at,
+         request_token_hash,
          created_at,
          updated_at
        )
-       VALUES ($1, $2, $3, $4, NOW(), $5, NULL, NOW(), NOW())
+       VALUES ($1, $2, $3, $4, NOW(), $5, NULL, $6, NOW(), NOW())
        ON CONFLICT (user_id)
        DO UPDATE SET
          requested_by_user_id = EXCLUDED.requested_by_user_id,
@@ -4286,12 +4392,16 @@ export class SocialService {
          requested_at = NOW(),
          expires_at = EXCLUDED.expires_at,
          consumed_at = NULL,
+         request_token_hash = EXCLUDED.request_token_hash,
          updated_at = NOW()
-       RETURNING user_id, requested_by_user_id, requested_by_kind, room_id, requested_at, expires_at, consumed_at`,
-      [params.userId, params.requestedByUserId ?? null, params.requestedByKind, params.roomId ?? null, expiresAt]
+       RETURNING user_id, requested_by_user_id, requested_by_kind, room_id, requested_at, expires_at, consumed_at, request_token_hash`,
+      [params.userId, params.requestedByUserId ?? null, params.requestedByKind, params.roomId ?? null, expiresAt, requestTokenHash]
     );
 
-    return result.rows[0];
+    return {
+      request: result.rows[0],
+      requestToken,
+    };
   }
 
   private mapUserLocation(row: UserLocationLatestRow): UserLocationDto {
