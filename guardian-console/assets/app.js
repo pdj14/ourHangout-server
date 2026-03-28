@@ -94,11 +94,15 @@ const COPY = {
     latest_location_at: '최근 위치 {time}',
     no_location_yet: '아직 위치 기록이 없어요.',
     view_location: '위치 보기',
+    checking_location: '위치 확인 중...',
+    request_location: '위치정보요청',
     precise_refresh: '정확히 새로고침',
     open_map: '지도 열기',
     flash_location_disabled: '이 계정은 위치 공유가 꺼져 있어요.',
     flash_location_missing: '아직 저장된 위치가 없어요.',
     flash_precise_refresh_requested: '정확한 위치 새로고침을 요청했어요. 만료 시각: {time}',
+    flash_location_updated: '위치가 업데이트되었어요. 시각: {time}',
+    flash_location_update_failed: '15초 안에 위치 업데이트가 오지 않았어요. 잠시 후 다시 시도해 주세요.',
     edit: '수정',
     revoke_sessions: '세션 종료',
     rooms_count: '{count}개 방',
@@ -305,11 +309,15 @@ const COPY = {
     latest_location_at: 'Last location {time}',
     no_location_yet: 'No location yet.',
     view_location: 'View location',
+    checking_location: 'Checking location...',
+    request_location: 'Request location',
     precise_refresh: 'Precise refresh',
     open_map: 'Open map',
     flash_location_disabled: 'Location sharing is disabled for this account.',
     flash_location_missing: 'No location captured yet.',
     flash_precise_refresh_requested: 'Precise refresh requested. Expires at {time}',
+    flash_location_updated: 'Location updated at {time}.',
+    flash_location_update_failed: 'No updated location arrived within 15 seconds. Please try again shortly.',
     edit: 'Edit',
     revoke_sessions: 'Revoke Sessions',
     rooms_count: '{count} rooms',
@@ -547,6 +555,7 @@ const state = {
   familyLinks: [],
   users: [],
   userLocations: {},
+  locationViewUserId: null,
   rooms: [],
   selectedRoomId: null,
   roomMessages: {
@@ -825,6 +834,29 @@ async function loadUserLocation(userId) {
   state.userLocations[userId] = data
   render()
   return data
+}
+
+function wait(ms) {
+  return new Promise((resolve) => window.setTimeout(resolve, ms))
+}
+
+async function waitForUserLocationRefresh(userId, requestedAt, previousCapturedAt) {
+  const requestedAtMs = Date.parse(requestedAt || new Date().toISOString())
+  const deadline = Date.now() + 15000
+  while (Date.now() <= deadline) {
+    const data = await loadUserLocation(userId)
+    const capturedAtMs = data?.location?.capturedAt ? Date.parse(data.location.capturedAt) : 0
+    if (capturedAtMs) {
+      const isFresh = previousCapturedAt
+        ? capturedAtMs > previousCapturedAt
+        : capturedAtMs >= requestedAtMs - 10000
+      if (isFresh) {
+        return data
+      }
+    }
+    await wait(1500)
+  }
+  return null
 }
 
 async function loadRooms() {
@@ -1170,6 +1202,7 @@ function renderUserOptions(selectedValue, includeBlankLabel = t('all_users')) {
 
 function renderUsers() {
   const draft = state.editDraft
+  const selectedLocation = draft ? state.userLocations[draft.id] : null
 
   return `
     <section class="panel section-stack">
@@ -1242,18 +1275,13 @@ function renderUsers() {
                               <span>${user.statusMessage ? escapeHtml(user.statusMessage) : escapeHtml(t('no_status'))}</span>
                               <span>${escapeHtml(user.locationSharingEnabled ? t('location_sharing_on') : t('location_sharing_off'))}</span>
                               <span>${user.latestLocationAt ? escapeHtml(t('latest_location_at', { time: formatDate(user.latestLocationAt) })) : escapeHtml(t('no_location_yet'))}</span>
-                              <span>${formatDate(user.updatedAt)}</span>
                             </div>
                           </td>
                           <td>
                             <div class="button-row">
-                              <button class="button secondary" type="button" data-edit-user="${escapeHtml(user.id)}">${escapeHtml(t('edit'))}</button>
-                              ${
-                                user.locationSharingEnabled
-                                  ? `<button class="button ghost" type="button" data-view-location="${escapeHtml(user.id)}">${escapeHtml(t('view_location'))}</button>
-                                     <button class="button ghost" type="button" data-refresh-location="${escapeHtml(user.id)}">${escapeHtml(t('precise_refresh'))}</button>`
-                                  : ''
-                              }
+                              <button class="button ghost" type="button" data-view-location="${escapeHtml(user.id)}" ${
+                                state.locationViewUserId === user.id ? 'disabled' : ''
+                              }>${escapeHtml(t('view_location'))}</button>
                               <button class="button danger" type="button" data-revoke-user="${escapeHtml(user.id)}">${escapeHtml(t('revoke_sessions'))}</button>
                             </div>
                           </td>
@@ -1279,61 +1307,32 @@ function renderUsers() {
             <section class="mini-panel">
               <div class="panel-header">
                 <div>
-                  <h3 style="margin:0">${escapeHtml(t('edit_user_title', { name: draft.effectiveName }))}</h3>
-                  <p class="panel-copy">${escapeHtml(t('edit_user_body'))}</p>
+                  <h3 style="margin:0">${escapeHtml(draft.effectiveName)} · ${escapeHtml(t('view_location'))}</h3>
+                  <p class="panel-copy">${escapeHtml(draft.email)}</p>
                 </div>
                 <button class="button ghost" type="button" data-action="cancel-edit">${escapeHtml(t('close'))}</button>
               </div>
-              <form id="user-edit-form" class="form-grid">
-                <input type="hidden" name="userId" value="${escapeHtml(draft.id)}" />
-                <div class="field">
-                  <label for="edit-role">${escapeHtml(t('role_filter_label'))}</label>
-                  <select class="select" id="edit-role" name="role">
-                    <option value="parent" ${draft.role === 'parent' ? 'selected' : ''}>${escapeHtml(t('role_parent'))}</option>
-                    <option value="user" ${draft.role === 'user' ? 'selected' : ''}>${escapeHtml(t('role_user'))}</option>
-                  </select>
+              <div class="panel" style="padding:16px; margin-top:12px">
+                <h4 style="margin:0 0 8px">Location</h4>
+                <div class="stack muted">
+                  ${state.locationViewUserId === draft.id ? `<span>${escapeHtml(t('checking_location'))}</span>` : ''}
+                  ${
+                    selectedLocation?.location
+                      ? `<span>${escapeHtml(String(selectedLocation.location.latitude))}, ${escapeHtml(String(selectedLocation.location.longitude))}</span>
+                         <span>${escapeHtml(formatDate(selectedLocation.location.capturedAt))}</span>
+                         <span>${escapeHtml(selectedLocation.location.source)}</span>`
+                      : `<span>${escapeHtml(t('no_location_yet'))}</span>`
+                  }
                 </div>
-                <div class="wide-field">
-                  <label for="edit-name">${escapeHtml(t('display_name_label'))}</label>
-                  <input class="input" id="edit-name" name="displayName" value="${escapeHtml(draft.displayName || '')}" />
+                <div class="button-row" style="margin-top:12px">
+                  <button class="button primary" type="button" data-request-location="${escapeHtml(draft.id)}" ${
+                    state.locationViewUserId === draft.id ? 'disabled' : ''
+                  }>${escapeHtml(state.locationViewUserId === draft.id ? t('checking_location') : t('request_location'))}</button>
+                  <button class="button ghost" type="button" data-open-location="${escapeHtml(draft.id)}" ${
+                    selectedLocation?.location ? '' : 'disabled'
+                  }>${escapeHtml(t('open_map'))}</button>
                 </div>
-                <div class="field">
-                  <label for="edit-phone">${escapeHtml(t('phone_label'))}</label>
-                  <input class="input" id="edit-phone" name="phoneE164" value="${escapeHtml(draft.phoneE164 || '')}" placeholder="+821012345678" />
-                </div>
-                <div class="field">
-                  <label for="edit-locale">${escapeHtml(t('locale_label'))}</label>
-                  <input class="input" id="edit-locale" name="locale" value="${escapeHtml(draft.locale || '')}" placeholder="ko-KR" />
-                </div>
-                <div class="wide-field">
-                  <label for="edit-status">${escapeHtml(t('status_message_label'))}</label>
-                  <textarea class="textarea" id="edit-status" name="statusMessage">${escapeHtml(draft.statusMessage || '')}</textarea>
-                </div>
-                <div class="button-row">
-                  <button class="button primary" type="submit">${escapeHtml(t('save'))}</button>
-                  <button class="button ghost" type="button" data-action="cancel-edit">${escapeHtml(t('cancel'))}</button>
-                </div>
-              </form>
-              ${
-                state.userLocations[draft.id]
-                  ? `<div class="panel" style="padding:16px; margin-top:12px">
-                      <h4 style="margin:0 0 8px">Location</h4>
-                      <div class="stack muted">
-                        <span>Sharing: ${state.userLocations[draft.id].sharingEnabled ? 'ON' : 'OFF'}</span>
-                        ${
-                          state.userLocations[draft.id].location
-                            ? `<span>${escapeHtml(String(state.userLocations[draft.id].location.latitude))}, ${escapeHtml(String(state.userLocations[draft.id].location.longitude))}</span>
-                               <span>${escapeHtml(formatDate(state.userLocations[draft.id].location.capturedAt))}</span>
-                               <span>${escapeHtml(state.userLocations[draft.id].location.source)}</span>
-                               <div class="button-row">
-                                 <button class="button ghost" type="button" data-open-location="${escapeHtml(draft.id)}">${escapeHtml(t('open_map'))}</button>
-                               </div>`
-                            : `<span>${escapeHtml(t('no_location_yet'))}</span>`
-                        }
-                      </div>
-                    </div>`
-                  : ''
-              }
+              </div>
             </section>
           `
           : ''
@@ -1965,7 +1964,7 @@ async function refreshCurrentTab() {
 
 app.addEventListener('click', async (event) => {
   const target = event.target.closest(
-    '[data-tab],[data-action],[data-set-locale],[data-edit-user],[data-revoke-user],[data-select-room],[data-delete-message],[data-delete-asset],[data-delete-release],[data-view-location],[data-refresh-location],[data-open-location]'
+    '[data-tab],[data-action],[data-set-locale],[data-edit-user],[data-revoke-user],[data-select-room],[data-delete-message],[data-delete-asset],[data-delete-release],[data-view-location],[data-request-location],[data-open-location]'
   )
   if (!target) return
 
@@ -1999,25 +1998,44 @@ app.addEventListener('click', async (event) => {
     }
 
     if (target.dataset.viewLocation) {
-      startEditUser(target.dataset.viewLocation)
-      const result = await loadUserLocation(target.dataset.viewLocation)
-      if (!result.sharingEnabled) {
-        setFlash('info', t('flash_location_disabled'))
-        return
-      }
-      if (result.location) {
+      const userId = target.dataset.viewLocation
+      startEditUser(userId)
+      state.locationViewUserId = userId
+      render()
+      try {
+        await loadUserLocation(userId)
+      } catch {
+        setFlash('error', t('flash_location_update_failed'))
+      } finally {
+        state.locationViewUserId = null
         render()
-      } else {
-        setFlash('info', t('flash_location_missing'))
       }
       return
     }
 
-    if (target.dataset.refreshLocation) {
-      const result = await apiRequest(`/v1/guardian/users/${target.dataset.refreshLocation}/location/refresh`, {
-        method: 'POST'
-      })
-      setFlash('info', t('flash_precise_refresh_requested', { time: formatDate(result.expiresAt) }))
+    if (target.dataset.requestLocation) {
+      const userId = target.dataset.requestLocation
+      state.locationViewUserId = userId
+      render()
+      try {
+        const current = await loadUserLocation(userId)
+        const previousCapturedAt = current?.location?.capturedAt ? Date.parse(current.location.capturedAt) : 0
+        const refresh = await apiRequest(`/v1/guardian/users/${userId}/location/refresh`, {
+          method: 'POST'
+        })
+        const updated = await waitForUserLocationRefresh(userId, refresh.requestedAt, previousCapturedAt)
+        if (!updated?.location) {
+          setFlash('error', t('flash_location_update_failed'))
+          return
+        }
+        setFlash('info', t('flash_location_updated', { time: formatDate(updated.location.capturedAt) }))
+      } catch (error) {
+        const message = error instanceof Error ? error.message : ''
+        setFlash('error', message || t('flash_location_update_failed'))
+      } finally {
+        state.locationViewUserId = null
+        render()
+      }
       return
     }
 

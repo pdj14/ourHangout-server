@@ -117,6 +117,7 @@ type RoomMemberProfileRow = {
   email: string;
   avatar_url: string | null;
   alias: string | null;
+  location_sharing_enabled: boolean | null;
   joined_at: Date;
 };
 
@@ -665,9 +666,6 @@ export class SocialService {
       `SELECT EXISTS(
          SELECT 1
          FROM room_relationships rr
-         INNER JOIN user_location_settings settings
-                 ON settings.user_id = rr.child_user_id
-                AND settings.sharing_enabled = TRUE
          WHERE rr.room_id = $1
            AND rr.relationship_type = 'guardian_child'
            AND rr.status = 'active'
@@ -695,6 +693,26 @@ export class SocialService {
         expiresAt: request.expires_at.toISOString()
       }
     });
+
+    if (this.pushService.isEnabled()) {
+      const pushTokens = await this.db.query<{ push_token: string }>(
+        `SELECT DISTINCT push_token
+         FROM device_tokens
+         WHERE user_id = $1`,
+        [targetUserId]
+      );
+      const result = await this.pushService.send({
+        tokens: pushTokens.rows.map((row) => row.push_token),
+        data: {
+          locationAction: 'refresh',
+          requestedAt: request.requested_at.toISOString()
+        },
+        headless: true
+      });
+      if (result.invalidTokens.length > 0) {
+        await this.db.query('DELETE FROM device_tokens WHERE push_token = ANY($1::text[])', [result.invalidTokens]);
+      }
+    }
 
     return {
       pending: true,
@@ -1883,16 +1901,19 @@ export class SocialService {
               u.email,
               u.avatar_url,
               rmp.alias,
+              settings.sharing_enabled AS location_sharing_enabled,
               rm.joined_at
        FROM room_members rm
        INNER JOIN users u ON u.id = rm.user_id
        LEFT JOIN room_member_profiles rmp
               ON rmp.room_id = rm.room_id
              AND rmp.user_id = rm.user_id
+       LEFT JOIN user_location_settings settings
+              ON settings.user_id = rm.user_id
        WHERE rm.room_id = $1
          AND rm.left_at IS NULL
        ORDER BY CASE WHEN rm.user_id = $2 THEN 0 ELSE 1 END,
-                rm.joined_at ASC`,
+               rm.joined_at ASC`,
       [params.roomId, params.userId]
     );
 
@@ -1902,7 +1923,8 @@ export class SocialService {
         userId: row.user_id,
         name: normalizeName(row.display_name, row.email),
         ...(row.avatar_url ? { avatarUri: row.avatar_url } : {}),
-        ...(row.alias?.trim() ? { alias: row.alias.trim() } : {})
+        ...(row.alias?.trim() ? { alias: row.alias.trim() } : {}),
+        locationSharingEnabled: !!row.location_sharing_enabled
       }))
     };
   }

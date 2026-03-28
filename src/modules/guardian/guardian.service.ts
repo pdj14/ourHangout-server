@@ -6,6 +6,7 @@ import type { Pool } from 'pg';
 import { env } from '../../config/env';
 import { AppError, ErrorCodes } from '../../lib/errors';
 import { normalizePhoneE164 } from '../../lib/phone';
+import { FcmPushService } from '../../lib/push/fcm-push.service';
 import type { ConnectionManager } from '../chat/connection-manager';
 import { GUARDIAN_CONSOLE_SUB } from './guardian.auth';
 import type { MessageDelivery, MessageKind, RoomType } from '../social/social.types';
@@ -310,6 +311,7 @@ export class GuardianService {
   constructor(
     private readonly db: Pool,
     private readonly connectionManager: ConnectionManager,
+    private readonly pushService: FcmPushService,
     private readonly logger: FastifyBaseLogger
   ) {}
 
@@ -796,18 +798,6 @@ export class GuardianService {
   ): Promise<{ pending: true; expiresAt: string }> {
     await this.assertParentRole(requesterUserId);
 
-    const settings = await this.db.query<{ sharing_enabled: boolean }>(
-      `SELECT sharing_enabled
-       FROM user_location_settings
-       WHERE user_id = $1
-       LIMIT 1`,
-      [targetUserId]
-    );
-
-    if (!(settings.rows[0]?.sharing_enabled ?? false)) {
-      throw new AppError(409, ErrorCodes.CONFLICT, 'Location sharing is disabled for this account.');
-    }
-
     const expiresAt = new Date(Date.now() + 3 * 60 * 1000);
     await this.db.query(
       `INSERT INTO user_location_precision_requests (
@@ -841,6 +831,26 @@ export class GuardianService {
         expiresAt: expiresAt.toISOString()
       }
     });
+
+    if (this.pushService.isEnabled()) {
+      const pushTokens = await this.db.query<{ push_token: string }>(
+        `SELECT DISTINCT push_token
+         FROM device_tokens
+         WHERE user_id = $1`,
+        [targetUserId]
+      );
+      const result = await this.pushService.send({
+        tokens: pushTokens.rows.map((row) => row.push_token),
+        data: {
+          locationAction: 'refresh',
+          requestedAt: new Date().toISOString()
+        },
+        headless: true
+      });
+      if (result.invalidTokens.length > 0) {
+        await this.db.query('DELETE FROM device_tokens WHERE push_token = ANY($1::text[])', [result.invalidTokens]);
+      }
+    }
 
     return {
       pending: true,

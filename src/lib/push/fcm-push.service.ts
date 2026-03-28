@@ -6,9 +6,10 @@ const FCM_SCOPE = 'https://www.googleapis.com/auth/firebase.messaging';
 
 type FcmPayload = {
   tokens: string[];
-  title: string;
-  body: string;
+  title?: string;
+  body?: string;
   data?: Record<string, string>;
+  headless?: boolean;
 };
 
 type FcmServiceAccount = {
@@ -84,22 +85,36 @@ export class FcmPushService {
         body: JSON.stringify({
           message: {
             token,
-            notification: {
-              title: payload.title,
-              body: payload.body
-            },
+            ...(!payload.headless
+              ? {
+                  notification: {
+                    title: payload.title || '',
+                    body: payload.body || ''
+                  }
+                }
+              : {}),
             data: payload.data,
             android: {
               priority: 'high',
-              notification: {
-                channel_id: this.env.FCM_ANDROID_CHANNEL_ID || 'messages',
-                tag: String(payload.data?.roomId || '')
-              }
+              ...(!payload.headless
+                ? {
+                    notification: {
+                      channel_id: this.env.FCM_ANDROID_CHANNEL_ID || 'messages',
+                      tag: String(payload.data?.roomId || '')
+                    }
+                  }
+                : {})
             },
             apns: {
+              headers: payload.headless
+                ? {
+                    'apns-push-type': 'background',
+                    'apns-priority': '5'
+                  }
+                : undefined,
               payload: {
                 aps: {
-                  sound: 'default'
+                  ...(payload.headless ? { 'content-available': 1 } : { sound: 'default' })
                 }
               }
             }
