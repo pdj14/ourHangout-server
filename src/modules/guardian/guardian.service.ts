@@ -6,9 +6,8 @@ import type { Pool } from 'pg';
 import { env } from '../../config/env';
 import { AppError, ErrorCodes } from '../../lib/errors';
 import { normalizePhoneE164 } from '../../lib/phone';
-import { FcmPushService } from '../../lib/push/fcm-push.service';
-import type { ConnectionManager } from '../chat/connection-manager';
 import { GUARDIAN_CONSOLE_SUB } from './guardian.auth';
+import type { SocialService } from '../social/social.service';
 import type { MessageDelivery, MessageKind, RoomType } from '../social/social.types';
 
 type UserRole = 'parent' | 'user';
@@ -310,8 +309,7 @@ async function collectStorageFiles(root: string, current = root): Promise<Storag
 export class GuardianService {
   constructor(
     private readonly db: Pool,
-    private readonly connectionManager: ConnectionManager,
-    private readonly pushService: FcmPushService,
+    private readonly socialService: SocialService,
     private readonly logger: FastifyBaseLogger
   ) {}
 
@@ -794,68 +792,28 @@ export class GuardianService {
 
   async requestUserLocationRefresh(
     requesterUserId: string,
-    targetUserId: string
-  ): Promise<{ pending: true; expiresAt: string }> {
-    await this.assertParentRole(requesterUserId);
-
-    const expiresAt = new Date(Date.now() + 3 * 60 * 1000);
-    await this.db.query(
-      `INSERT INTO user_location_precision_requests (
-         user_id,
-         requested_by_user_id,
-         requested_by_kind,
-         room_id,
-         requested_at,
-         expires_at,
-         consumed_at,
-         created_at,
-         updated_at
-       )
-       VALUES ($1, NULL, 'guardian_console', NULL, NOW(), $2, NULL, NOW(), NOW())
-       ON CONFLICT (user_id)
-       DO UPDATE SET
-         requested_by_user_id = NULL,
-         requested_by_kind = 'guardian_console',
-         room_id = NULL,
-         requested_at = NOW(),
-         expires_at = EXCLUDED.expires_at,
-         consumed_at = NULL,
-         updated_at = NOW()`,
-      [targetUserId, expiresAt]
-    );
-
-    this.connectionManager.sendToUser(targetUserId, {
-      event: 'location.precision.requested',
-      data: {
-        requestedAt: new Date().toISOString(),
-        expiresAt: expiresAt.toISOString()
-      }
-    });
-
-    if (this.pushService.isEnabled()) {
-      const pushTokens = await this.db.query<{ push_token: string }>(
-        `SELECT DISTINCT push_token
-         FROM device_tokens
-         WHERE user_id = $1`,
-        [targetUserId]
-      );
-      const result = await this.pushService.send({
-        tokens: pushTokens.rows.map((row) => row.push_token),
-        data: {
-          locationAction: 'refresh',
-          requestedAt: new Date().toISOString()
-        },
-        headless: true
-      });
-      if (result.invalidTokens.length > 0) {
-        await this.db.query('DELETE FROM device_tokens WHERE push_token = ANY($1::text[])', [result.invalidTokens]);
-      }
-    }
-
-    return {
-      pending: true,
-      expiresAt: expiresAt.toISOString()
+    targetUserId: string,
+    backendBaseUrl?: string
+  ): Promise<{
+    pending: true;
+    requestedAt: string;
+    expiresAt: string;
+    delivery: {
+      status: 'delivered' | 'unreachable';
+      websocketDelivered: boolean;
+      pushServiceEnabled: boolean;
+      pushTokenCount: number;
+      pushSentCount: number;
     };
+  }> {
+    await this.assertParentRole(requesterUserId);
+    return this.socialService.requestLocationPrecisionRefresh({
+      targetUserId,
+      requestedByKind: 'guardian_console',
+      requestedByUserId: null,
+      roomId: null,
+      backendBaseUrl
+    });
   }
 
   async revokeUserSessions(requesterUserId: string, targetUserId: string): Promise<{ revoked: boolean }> {
