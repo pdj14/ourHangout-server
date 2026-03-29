@@ -241,6 +241,14 @@ type UserLocationPrecisionRequestRow = {
   request_token_hash: string | null;
 };
 
+type LocationPrecisionRefreshDelivery = {
+  status: 'delivered' | 'unreachable';
+  websocketDelivered: boolean;
+  pushServiceEnabled: boolean;
+  pushTokenCount: number;
+  pushSentCount: number;
+};
+
 type FamilyRoomLocationRow = {
   user_id: string;
   display_name: string | null;
@@ -724,36 +732,80 @@ export class SocialService {
       throw new AppError(403, ErrorCodes.FORBIDDEN, 'You do not have access to request this member location.');
     }
 
-    const { request, requestToken } = await this.upsertLocationPrecisionRequest({
-      userId: targetUserId,
+    const result = await this.requestLocationPrecisionRefresh({
+      targetUserId,
       requestedByKind: 'guardian_app',
       requestedByUserId: params.userId,
-      roomId: params.roomId
+      roomId: params.roomId,
+      backendBaseUrl: params.backendBaseUrl
     });
+
+    return {
+      pending: result.pending,
+      requestId: result.requestId,
+      requestedAt: result.requestedAt,
+      expiresAt: result.expiresAt
+    };
+  }
+
+  async requestLocationPrecisionRefresh(params: {
+    targetUserId: string;
+    requestedByKind: 'guardian_app' | 'guardian_console';
+    requestedByUserId?: string | null;
+    roomId?: string | null;
+    backendBaseUrl?: string;
+  }): Promise<
+    UserLocationRefreshRequestDto & {
+      pending: true;
+      requestId: string;
+      requestedAt: string;
+      expiresAt: string;
+      delivery: LocationPrecisionRefreshDelivery;
+    }
+  > {
+    const targetUserId = params.targetUserId.trim();
+    if (!targetUserId) {
+      throw new AppError(400, ErrorCodes.VALIDATION_ERROR, 'Target user id is required.');
+    }
+
+    const backendBaseUrl = (params.backendBaseUrl || '').trim();
+    const { request, requestToken } = await this.upsertLocationPrecisionRequest({
+      userId: targetUserId,
+      requestedByKind: params.requestedByKind,
+      requestedByUserId: params.requestedByUserId ?? null,
+      roomId: params.roomId ?? null
+    });
+    const requestTokenHashPrefix = request.request_token_hash?.slice(0, 12) || hashLocationRequestToken(requestToken).slice(0, 12);
+    const requestPayload = {
+      requestedAt: request.requested_at.toISOString(),
+      expiresAt: request.expires_at.toISOString(),
+      requestToken,
+      ...(backendBaseUrl ? { backendBaseUrl } : {})
+    };
 
     this.logger.info(
       {
         tag: 'location_refresh.requested',
-        roomId: params.roomId,
-        requesterUserId: params.userId,
+        requestedByKind: params.requestedByKind,
+        roomId: params.roomId ?? null,
+        requesterUserId: params.requestedByUserId ?? null,
         targetUserId,
         requestedAt: request.requested_at.toISOString(),
         expiresAt: request.expires_at.toISOString(),
-        requestTokenHashPrefix: hashLocationRequestToken(requestToken).slice(0, 12),
-        backendBaseUrl: (params.backendBaseUrl || '').trim()
+        requestTokenHashPrefix,
+        backendBaseUrl
       },
       'Location precision refresh requested'
     );
 
-    this.connectionManager.sendToUser(targetUserId, {
+    const websocketDelivered = this.connectionManager.sendToUser(targetUserId, {
       event: 'location.precision.requested',
-      data: {
-        requestedAt: request.requested_at.toISOString(),
-        expiresAt: request.expires_at.toISOString(),
-        requestToken,
-        backendBaseUrl: (params.backendBaseUrl || '').trim()
-      }
+      data: requestPayload
     });
+
+    let pushTokenCount = 0;
+    let pushSentCount = 0;
+    const pushServiceEnabled = this.pushService.isEnabled();
 
     if (this.pushService.isEnabled()) {
       const pushTokens = await this.db.query<{ push_token: string }>(
@@ -762,13 +814,17 @@ export class SocialService {
          WHERE user_id = $1`,
         [targetUserId]
       );
+      pushTokenCount = pushTokens.rows.length;
       this.logger.info(
         {
           tag: 'location_refresh.push.prepare',
-          roomId: params.roomId,
+          requestedByKind: params.requestedByKind,
+          roomId: params.roomId ?? null,
+          requesterUserId: params.requestedByUserId ?? null,
           targetUserId,
-          pushTokenCount: pushTokens.rows.length,
-          requestTokenHashPrefix: hashLocationRequestToken(requestToken).slice(0, 12)
+          pushTokenCount,
+          websocketDelivered,
+          requestTokenHashPrefix
         },
         'Preparing location refresh push'
       );
@@ -776,21 +832,23 @@ export class SocialService {
         tokens: pushTokens.rows.map((row) => row.push_token),
         data: {
           locationAction: 'refresh',
-          requestedAt: request.requested_at.toISOString(),
-          expiresAt: request.expires_at.toISOString(),
-          requestToken,
-          backendBaseUrl: (params.backendBaseUrl || '').trim()
+          ...requestPayload
         },
         headless: true
       });
+      pushSentCount = result.sentCount;
       this.logger.info(
         {
           tag: 'location_refresh.push.result',
-          roomId: params.roomId,
+          requestedByKind: params.requestedByKind,
+          roomId: params.roomId ?? null,
+          requesterUserId: params.requestedByUserId ?? null,
           targetUserId,
-          sentCount: result.sentCount,
+          pushTokenCount,
+          pushSentCount,
+          websocketDelivered,
           invalidTokens: result.invalidTokens,
-          requestTokenHashPrefix: hashLocationRequestToken(requestToken).slice(0, 12)
+          requestTokenHashPrefix
         },
         'Location refresh push send result'
       );
@@ -801,18 +859,29 @@ export class SocialService {
       this.logger.warn(
         {
           tag: 'location_refresh.push.disabled',
-          roomId: params.roomId,
+          requestedByKind: params.requestedByKind,
+          roomId: params.roomId ?? null,
+          requesterUserId: params.requestedByUserId ?? null,
           targetUserId
         },
         'Push service disabled for location refresh request'
       );
     }
 
+    const delivered = websocketDelivered || pushSentCount > 0;
+
     return {
       pending: true,
       requestId: request.user_id,
       requestedAt: request.requested_at.toISOString(),
-      expiresAt: request.expires_at.toISOString()
+      expiresAt: request.expires_at.toISOString(),
+      delivery: {
+        status: delivered ? 'delivered' : 'unreachable',
+        websocketDelivered,
+        pushServiceEnabled,
+        pushTokenCount,
+        pushSentCount
+      }
     };
   }
 

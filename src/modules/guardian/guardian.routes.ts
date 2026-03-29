@@ -209,7 +209,8 @@ export async function guardianRoutes(app: FastifyInstance): Promise<void> {
     },
     async (request) => {
       const params = request.params as { userId: string };
-      const data = await app.guardianService.requestUserLocationRefresh(request.user.sub, params.userId);
+      const backendBaseUrl = `${request.protocol}://${request.headers.host || ''}`.replace(/\/+$/, '');
+      const data = await app.guardianService.requestUserLocationRefresh(request.user.sub, params.userId, backendBaseUrl);
       return { success: true, data };
     }
   );
