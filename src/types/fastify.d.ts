@@ -10,6 +10,7 @@ import type { AuthService } from '../modules/auth/auth.service';
 import type { PairingService } from '../modules/pairing/pairing.service';
 import type { ContactsService } from '../modules/contacts/contacts.service';
 import type { BotService } from '../modules/bots/bot.service';
+import type { PobiService } from '../modules/pobis/pobi.service';
 import type { SocialService } from '../modules/social/social.service';
 import type { GuardianService } from '../modules/guardian/guardian.service';
 import type { FamilyService } from '../modules/family/family.service';
@@ -30,6 +31,7 @@ declare module 'fastify' {
     pairingService: PairingService;
     contactsService: ContactsService;
     botService: BotService;
+    pobiService: PobiService;
     socialService: SocialService;
     familyService: FamilyService;
     guardianService: GuardianService;

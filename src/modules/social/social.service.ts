@@ -2028,6 +2028,113 @@ export class SocialService {
     };
   }
 
+  async addBotMemberToRoom(params: {
+    userId: string;
+    roomId: string;
+    botUserId: string;
+  }): Promise<{ roomId: string; joined: true }> {
+    const membership = await this.getRoomMembership(params.roomId, params.userId);
+    this.assertSharedRoom(membership);
+
+    const botUserId = params.botUserId.trim();
+    if (!botUserId) {
+      throw new AppError(400, ErrorCodes.VALIDATION_ERROR, 'Bot user id is required.');
+    }
+
+    if (!(await this.isActiveBotUser(botUserId))) {
+      throw new AppError(404, ErrorCodes.RESOURCE_NOT_FOUND, 'Active bot user not found.');
+    }
+
+    const client = await this.db.connect();
+    try {
+      await client.query('BEGIN');
+
+      await client.query(
+        `INSERT INTO room_members (room_id, user_id, role, joined_at, left_at)
+         VALUES ($1, $2, 'member', NOW(), NULL)
+         ON CONFLICT (room_id, user_id)
+         DO UPDATE SET
+           role = 'member',
+           left_at = NULL`,
+        [params.roomId, botUserId]
+      );
+
+      await client.query(
+        `INSERT INTO room_user_settings (room_id, user_id, favorite, muted, created_at, updated_at)
+         VALUES ($1, $2, FALSE, FALSE, NOW(), NOW())
+         ON CONFLICT (room_id, user_id)
+         DO UPDATE SET
+           hidden_at = NULL,
+           updated_at = NOW()`,
+        [params.roomId, botUserId]
+      );
+
+      await client.query(
+        `UPDATE rooms
+         SET updated_at = NOW()
+         WHERE id = $1`,
+        [params.roomId]
+      );
+
+      await client.query('COMMIT');
+    } catch (error) {
+      await client.query('ROLLBACK');
+      throw error;
+    } finally {
+      client.release();
+    }
+
+    this.emitToUsers(await this.getActiveRoomMemberIds(params.roomId), {
+      event: 'room.updated',
+      data: { roomId: params.roomId }
+    });
+
+    return {
+      roomId: params.roomId,
+      joined: true
+    };
+  }
+
+  async removeBotMemberFromRoom(params: {
+    userId: string;
+    roomId: string;
+    botUserId: string;
+  }): Promise<{ roomId: string; removed: true }> {
+    const membership = await this.getRoomMembership(params.roomId, params.userId);
+    this.assertSharedRoom(membership);
+
+    const botUserId = params.botUserId.trim();
+    if (!botUserId) {
+      throw new AppError(400, ErrorCodes.VALIDATION_ERROR, 'Bot user id is required.');
+    }
+
+    if (!(await this.isActiveRoomMember(params.roomId, botUserId))) {
+      return {
+        roomId: params.roomId,
+        removed: true
+      };
+    }
+
+    await this.removeRoomMembership(params.roomId, botUserId);
+
+    await this.db.query(
+      `UPDATE rooms
+       SET updated_at = NOW()
+       WHERE id = $1`,
+      [params.roomId]
+    );
+
+    this.emitToUsers(await this.getAllRoomMemberIds(params.roomId), {
+      event: 'room.updated',
+      data: { roomId: params.roomId }
+    });
+
+    return {
+      roomId: params.roomId,
+      removed: true
+    };
+  }
+
   async listRoomInvitations(userId: string): Promise<RoomInvitationListDto> {
     const result = await this.db.query<RoomInvitationRow>(
       `SELECT fri.id,
@@ -4402,6 +4509,18 @@ export class SocialService {
        WHERE room_id = $1
          AND status IN ('pending', 'active')
          AND (guardian_user_id = $2 OR child_user_id = $2)`,
+      [roomId, targetUserId]
+    );
+
+    await executor.query(
+      `UPDATE room_members rm
+       SET left_at = NOW()
+       FROM pobis p
+       INNER JOIN bots b ON b.id = p.bot_id
+       WHERE rm.room_id = $1
+         AND rm.user_id = b.user_id
+         AND p.owner_user_id = $2
+         AND rm.left_at IS NULL`,
       [roomId, targetUserId]
     );
   }

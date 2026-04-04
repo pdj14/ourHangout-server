@@ -774,6 +774,54 @@ export async function socialRoutes(app: FastifyInstance): Promise<void> {
     }
   );
 
+  app.post(
+    '/rooms/:roomId/pobis/:pobiId/join',
+    {
+      preHandler: app.authenticate,
+      schema: {
+        tags: ['pobis'],
+        summary: 'Join current user-owned Pobi to a shared room',
+        params: {
+          type: 'object',
+          required: ['roomId', 'pobiId'],
+          properties: {
+            roomId: { type: 'string', format: 'uuid' },
+            pobiId: { type: 'string', format: 'uuid' }
+          }
+        }
+      }
+    },
+    async (request) => {
+      const params = request.params as { roomId: string; pobiId: string };
+      const data = await app.pobiService.joinPobiToRoom(request.user.sub, params.pobiId, params.roomId);
+      return { success: true, data };
+    }
+  );
+
+  app.delete(
+    '/rooms/:roomId/pobis/:pobiId',
+    {
+      preHandler: app.authenticate,
+      schema: {
+        tags: ['pobis'],
+        summary: 'Remove current user-owned Pobi from a shared room',
+        params: {
+          type: 'object',
+          required: ['roomId', 'pobiId'],
+          properties: {
+            roomId: { type: 'string', format: 'uuid' },
+            pobiId: { type: 'string', format: 'uuid' }
+          }
+        }
+      }
+    },
+    async (request) => {
+      const params = request.params as { roomId: string; pobiId: string };
+      const data = await app.pobiService.leavePobiFromRoom(request.user.sub, params.pobiId, params.roomId);
+      return { success: true, data };
+    }
+  );
+
   app.get(
     '/rooms/:roomId/member-profiles',
     {

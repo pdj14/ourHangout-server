@@ -14,6 +14,8 @@ import { RedisChatEventBus } from './modules/chat/redis-event-bus';
 import { healthRoutes } from './modules/health/health.routes';
 import { BotService } from './modules/bots/bot.service';
 import { botRoutes } from './modules/bots/bot.routes';
+import { PobiService } from './modules/pobis/pobi.service';
+import { pobiRoutes } from './modules/pobis/pobi.routes';
 import { ClawBridgeService } from './modules/openclaw/claw-bridge.service';
 import { OpenClawConnectorHub } from './modules/openclaw/connector-hub';
 import { openClawRoutes } from './modules/openclaw/openclaw.routes';
@@ -110,6 +112,11 @@ export async function buildServer(): Promise<FastifyInstance> {
     socialService,
     logger: app.log
   });
+  const pobiService = new PobiService({
+    db,
+    socialService,
+    logger: app.log
+  });
 
   await botService.ensureDefaultBots();
 
@@ -126,6 +133,7 @@ export async function buildServer(): Promise<FastifyInstance> {
   app.decorate('contactsService', contactsService);
   app.decorate('chatService', chatService);
   app.decorate('botService', botService);
+  app.decorate('pobiService', pobiService);
   app.decorate('socialService', socialService);
   app.decorate('familyService', familyService);
   app.decorate('guardianService', guardianService);
@@ -153,6 +161,7 @@ export async function buildServer(): Promise<FastifyInstance> {
   await app.register(guardianRoutes, { prefix: '/v1/guardian' });
   await app.register(guardianAppUpdatesRoutes, { prefix: '/v1/guardian/app-updates' });
   await app.register(botRoutes, { prefix: '/v1/bots' });
+  await app.register(pobiRoutes, { prefix: '/v1/pobis' });
   await app.register(websocketRoutes, { prefix: '/v1' });
   await app.register(openClawRoutes, { prefix: '/v1/openclaw' });
   await app.register(guardianConsoleRoutes);

@@ -16,6 +16,7 @@ export const swaggerPlugin = fp(async (app) => {
         { name: 'pairing', description: 'One-time device pairing codes' },
         { name: 'family', description: 'Friend-to-family upgrades, family links, groups, and permissions' },
         { name: 'bots', description: 'In-app bot discovery and bot room bootstrap' },
+        { name: 'pobis', description: 'Owner-owned Pobi companion creation and direct chat bootstrap' },
         { name: 'chat', description: '1:1 rooms, messages, and ACK handling' },
         { name: 'social', description: 'Profiles, friends, rooms, media, reports, and push token APIs' },
         { name: 'app-updates', description: 'Published Android APK version checks and download endpoints' },

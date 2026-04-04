@@ -101,10 +101,12 @@ export class BotService {
 
   async listBots(): Promise<BotSummary[]> {
     const result = await this.db.query<BotRow>(
-      `SELECT id, bot_key, name, description, provider, user_id, is_active, created_at
-       FROM bots
-       WHERE is_active = TRUE
-       ORDER BY created_at ASC`
+      `SELECT b.id, b.bot_key, b.name, b.description, b.provider, b.user_id, b.is_active, b.created_at
+       FROM bots b
+       LEFT JOIN pobis p ON p.bot_id = b.id
+       WHERE b.is_active = TRUE
+         AND p.bot_id IS NULL
+       ORDER BY b.created_at ASC`
     );
 
     return result.rows.map((row) => this.mapBot(row));
@@ -131,9 +133,11 @@ export class BotService {
 
   private async getBotById(botId: string): Promise<BotRow> {
     const result = await this.db.query<BotRow>(
-      `SELECT id, bot_key, name, description, provider, user_id, is_active, created_at
-       FROM bots
-       WHERE id = $1
+      `SELECT b.id, b.bot_key, b.name, b.description, b.provider, b.user_id, b.is_active, b.created_at
+       FROM bots b
+       LEFT JOIN pobis p ON p.bot_id = b.id
+       WHERE b.id = $1
+         AND p.bot_id IS NULL
        LIMIT 1`,
       [botId]
     );
