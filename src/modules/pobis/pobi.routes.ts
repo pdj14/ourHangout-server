@@ -28,13 +28,15 @@ export async function pobiRoutes(app: FastifyInstance): Promise<void> {
           required: ['name'],
           properties: {
             name: { type: 'string', minLength: 1, maxLength: 40 },
-            theme: { type: 'string', minLength: 1, maxLength: 32 }
+            theme: { type: 'string', minLength: 1, maxLength: 32 },
+            status: { type: 'string', maxLength: 200 },
+            avatarUri: { type: 'string', maxLength: 1024 }
           }
         }
       }
     },
     async (request) => {
-      const body = request.body as { name: string; theme?: string };
+      const body = request.body as { name: string; theme?: string; status?: string; avatarUri?: string };
       const data = await app.pobiService.createPobi(request.user.sub, body);
       return { success: true, data };
     }
@@ -59,6 +61,8 @@ export async function pobiRoutes(app: FastifyInstance): Promise<void> {
           properties: {
             name: { type: 'string', minLength: 1, maxLength: 40 },
             theme: { type: 'string', minLength: 1, maxLength: 32 },
+            status: { type: 'string', maxLength: 200 },
+            avatarUri: { type: 'string', maxLength: 1024 },
             setDefault: { type: 'boolean' }
           }
         }
@@ -66,7 +70,8 @@ export async function pobiRoutes(app: FastifyInstance): Promise<void> {
     },
     async (request) => {
       const params = request.params as { pobiId: string };
-      const body = (request.body as { name?: string; theme?: string; setDefault?: boolean } | undefined) ?? {};
+      const body =
+        (request.body as { name?: string; theme?: string; status?: string; avatarUri?: string; setDefault?: boolean } | undefined) ?? {};
       const data = await app.pobiService.updatePobi(request.user.sub, params.pobiId, body);
       return { success: true, data };
     }

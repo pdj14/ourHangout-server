@@ -7,6 +7,8 @@ export interface PobiSummary {
   botId: string;
   botKey: string;
   botUserId: string;
+  status?: string;
+  avatarUri?: string;
   isDefault: boolean;
   isActive: boolean;
   createdAt: string;

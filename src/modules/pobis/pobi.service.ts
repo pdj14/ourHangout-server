@@ -10,6 +10,8 @@ type PobiRow = {
   owner_user_id: string;
   display_name: string;
   theme: string;
+  status_message: string | null;
+  avatar_url: string | null;
   pobi_is_default: boolean;
   pobi_is_active: boolean;
   pobi_created_at: Date;
@@ -44,6 +46,8 @@ export class PobiService {
               p.owner_user_id,
               p.display_name,
               p.theme,
+              u.status_message,
+              u.avatar_url,
               p.is_default AS pobi_is_default,
               p.is_active AS pobi_is_active,
               p.created_at AS pobi_created_at,
@@ -53,6 +57,7 @@ export class PobiService {
               b.user_id AS bot_user_id
        FROM pobis p
        INNER JOIN bots b ON b.id = p.bot_id
+       INNER JOIN users u ON u.id = b.user_id
        WHERE p.owner_user_id = $1
          AND p.is_active = TRUE
          AND b.is_active = TRUE
@@ -68,6 +73,8 @@ export class PobiService {
     input: {
       name: string;
       theme?: string;
+      status?: string;
+      avatarUri?: string;
     }
   ): Promise<PobiSummary> {
     const name = input.name.trim();
@@ -76,6 +83,11 @@ export class PobiService {
     }
 
     const theme = this.normalizeTheme(input.theme);
+    const status = (input.status || '').trim();
+    const avatarUri = (input.avatarUri || '').trim();
+    if (status.length > 200) {
+      throw new AppError(400, ErrorCodes.VALIDATION_ERROR, 'Pobi status must be 0-200 characters.');
+    }
 
     const client = await this.db.connect();
     let pobiId = '';
@@ -111,6 +123,15 @@ export class PobiService {
       if (!botUserId) {
         throw new AppError(500, ErrorCodes.INTERNAL_ERROR, 'Failed to create Pobi user.');
       }
+
+      await client.query(
+        `UPDATE users
+         SET status_message = $2,
+             avatar_url = $3,
+             updated_at = NOW()
+         WHERE id = $1`,
+        [botUserId, status || null, avatarUri || null]
+      );
 
       const botInsert = await client.query<{ id: string }>(
         `INSERT INTO bots (bot_key, name, description, user_id, provider, is_active)
@@ -155,15 +176,22 @@ export class PobiService {
     input: {
       name?: string;
       theme?: string;
+      status?: string;
+      avatarUri?: string;
       setDefault?: boolean;
     }
   ): Promise<PobiSummary> {
     const current = await this.getPobiRowByIdForOwner(ownerUserId, pobiId);
     const nextName = input.name === undefined ? current.display_name : input.name.trim();
     const nextTheme = input.theme === undefined ? current.theme : this.normalizeTheme(input.theme);
+    const nextStatus = input.status === undefined ? current.status_message ?? '' : input.status.trim();
+    const nextAvatarUri = input.avatarUri === undefined ? current.avatar_url ?? '' : input.avatarUri.trim();
 
     if (nextName.length < 1 || nextName.length > 40) {
       throw new AppError(400, ErrorCodes.VALIDATION_ERROR, 'Pobi name must be 1-40 characters.');
+    }
+    if (nextStatus.length > 200) {
+      throw new AppError(400, ErrorCodes.VALIDATION_ERROR, 'Pobi status must be 0-200 characters.');
     }
 
     const client = await this.db.connect();
@@ -202,9 +230,11 @@ export class PobiService {
       await client.query(
         `UPDATE users
          SET display_name = $2,
+             status_message = $3,
+             avatar_url = $4,
              updated_at = NOW()
          WHERE id = $1`,
-        [current.bot_user_id, nextName]
+        [current.bot_user_id, nextName, nextStatus || null, nextAvatarUri || null]
       );
 
       await client.query('COMMIT');
@@ -289,6 +319,8 @@ export class PobiService {
               p.owner_user_id,
               p.display_name,
               p.theme,
+              u.status_message,
+              u.avatar_url,
               p.is_default AS pobi_is_default,
               p.is_active AS pobi_is_active,
               p.created_at AS pobi_created_at,
@@ -298,6 +330,7 @@ export class PobiService {
               b.user_id AS bot_user_id
        FROM pobis p
        INNER JOIN bots b ON b.id = p.bot_id
+       INNER JOIN users u ON u.id = b.user_id
        WHERE p.id = $1
          AND p.owner_user_id = $2
          AND p.is_active = TRUE
@@ -335,6 +368,8 @@ export class PobiService {
       botId: row.bot_id,
       botKey: row.bot_key,
       botUserId: row.bot_user_id,
+      ...(row.status_message ? { status: row.status_message } : {}),
+      ...(row.avatar_url ? { avatarUri: row.avatar_url } : {}),
       isDefault: row.pobi_is_default,
       isActive: row.pobi_is_active,
       createdAt: row.pobi_created_at.toISOString(),
