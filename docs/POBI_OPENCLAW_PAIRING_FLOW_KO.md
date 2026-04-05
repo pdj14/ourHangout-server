@@ -1,5 +1,8 @@
 # Pobi OpenClaw Pairing Flow Guide
 
+For Raspberry Pi / OpenClaw device setup, use:
+`https://github.com/pdj14/ourHangout-openclaw-connector`
+
 ## 1. 목적
 
 이 문서는 포비(Pobi)를 사용자가 직접 OpenClaw 디바이스와 연결하는
@@ -131,7 +134,7 @@ CONNECTOR_ID=raspi-openclaw-1 \
 CONNECTOR_BOT_KEYS=pobi-a1b2c3 \
 CONNECTOR_MODE=http \
 OPENCLAW_LOCAL_BASE_URL=http://127.0.0.1:18888 \
-npm run connector:dev
+cd ourHangout-openclaw-connector && npm run start
 ```
 
 중요:
@@ -150,7 +153,7 @@ OPENCLAW_CONNECTOR_TOKEN=<SERVER_SECRET> \
 HUB_WS_URL=ws://<SERVER_HOST>:3000/v1/openclaw/connector/ws \
 CONNECTOR_ID=my-device \
 CONNECTOR_BOT_KEYS=pobi-a1b2c3 \
-npm run connector:dev
+cd ourHangout-openclaw-connector && npm run start
 ```
 
 ### 사용자 pairing 방식
@@ -162,7 +165,7 @@ CONNECTOR_ID=raspi-openclaw-1 \
 CONNECTOR_DEVICE_NAME="Living Room Pi" \
 CONNECTOR_MODE=http \
 OPENCLAW_LOCAL_BASE_URL=http://127.0.0.1:18888 \
-npm run connector:dev
+cd ourHangout-openclaw-connector && npm run start
 ```
 
 pairing 방식 동작:

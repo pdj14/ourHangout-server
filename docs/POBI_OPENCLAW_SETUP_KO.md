@@ -1,5 +1,8 @@
 # Pobi + OpenClaw 실행/연결 가이드
 
+For Raspberry Pi / OpenClaw device setup, use:
+`https://github.com/pdj14/ourHangout-openclaw-connector`
+
 ## 1. 목적
 
 이 문서는 OurHangout 앱의 `포비(Pobi)`를
@@ -117,7 +120,7 @@ CONNECTOR_ID=my-openclaw-device-1 \
 CONNECTOR_BOT_KEYS=pobi-xxxxxxxx \
 CONNECTOR_MODE=http \
 OPENCLAW_LOCAL_BASE_URL=http://127.0.0.1:18888 \
-npm run connector:dev
+cd ourHangout-openclaw-connector && npm run start
 ```
 
 중요:

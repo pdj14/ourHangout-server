@@ -187,8 +187,8 @@ When using local media uploads, keep `MEDIA_STORAGE_DIR=storage/media` and prese
 If API runs in Docker, `127.0.0.1` points to API container itself. Use a reachable host/IP from the container network.
 
 Connector mode note:
-Run connector client on OpenClaw-side device and connect to:
-`ws://<BE_HOST>:3000/v1/openclaw/connector/ws?token=<OPENCLAW_CONNECTOR_TOKEN>&connectorId=<id>&botKey=openclaw-assistant`
+For Raspberry Pi / OpenClaw-side setup, use the standalone connector repository:
+`https://github.com/pdj14/ourHangout-openclaw-connector`
 
 ## 6) Verification checklist (MVP)
 
@@ -247,12 +247,11 @@ Notes:
 Connector sample client:
 
 ```bash
-OPENCLAW_CONNECTOR_TOKEN=replace-openclaw-connector-token \
-HUB_WS_URL=ws://localhost:3000/v1/openclaw/connector/ws \
-CONNECTOR_ID=openclaw-device-1 \
-CONNECTOR_BOT_KEYS=openclaw-assistant \
-CONNECTOR_MODE=mock \
-npm run connector:dev
+git clone https://github.com/pdj14/ourHangout-openclaw-connector.git
+cd ourHangout-openclaw-connector
+npm install
+cp .env.example .env
+npm run start
 ```
 
 ## 7) Default seed users
