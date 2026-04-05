@@ -37,6 +37,12 @@ export interface PobiOpenClawInfo {
       botKeys: string[];
       lastSeenAt: string;
     }>;
+    matchedChannels?: Array<{
+      accountId: string;
+      pobiIds: string[];
+      botKeys: string[];
+      lastSeenAt: string;
+    }>;
   };
 }
 

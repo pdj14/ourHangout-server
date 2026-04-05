@@ -1244,7 +1244,8 @@ export async function socialRoutes(app: FastifyInstance): Promise<void> {
             clientMessageId: { type: 'string', minLength: 1, maxLength: 128 },
             kind: { type: 'string', enum: ['text', 'image', 'video', 'system'] },
             text: { type: 'string', minLength: 1, maxLength: 5000 },
-            uri: { type: 'string', maxLength: 2048 }
+            uri: { type: 'string', maxLength: 2048 },
+            replyToMessageId: { type: 'string', format: 'uuid' }
           }
         }
       }
@@ -1256,6 +1257,7 @@ export async function socialRoutes(app: FastifyInstance): Promise<void> {
         kind: MessageKind;
         text?: string;
         uri?: string;
+        replyToMessageId?: string;
       };
       const data = await app.socialService.sendRoomMessage({
         userId: request.user.sub,
@@ -1263,7 +1265,8 @@ export async function socialRoutes(app: FastifyInstance): Promise<void> {
         clientMessageId: body.clientMessageId,
         kind: body.kind,
         text: body.text,
-        uri: body.uri
+        uri: body.uri,
+        replyToMessageId: body.replyToMessageId
       });
       return { success: true, data };
     }

@@ -17,6 +17,7 @@ import { botRoutes } from './modules/bots/bot.routes';
 import { PobiService } from './modules/pobis/pobi.service';
 import { pobiRoutes } from './modules/pobis/pobi.routes';
 import { ClawBridgeService } from './modules/openclaw/claw-bridge.service';
+import { OpenClawChannelHub } from './modules/openclaw/channel-hub';
 import { OpenClawConnectorHub } from './modules/openclaw/connector-hub';
 import { openClawRoutes } from './modules/openclaw/openclaw.routes';
 import { createClawProvider } from './modules/openclaw/provider.factory';
@@ -72,6 +73,7 @@ export async function buildServer(): Promise<FastifyInstance> {
   const metrics = new MetricsRegistry();
   const connectionManager = new ConnectionManager(app.log);
   const eventBus = new RedisChatEventBus(redis, redisSubscriber, app.log);
+  const openClawChannelHub = new OpenClawChannelHub(app.log);
   const openClawConnectorHub = new OpenClawConnectorHub(app.log);
   const clawProvider = createClawProvider({
     env,
@@ -102,6 +104,7 @@ export async function buildServer(): Promise<FastifyInstance> {
     db,
     connectionManager,
     clawBridge,
+    openClawChannelHub,
     pushService: fcmPushService,
     logger: app.log
   });
@@ -115,6 +118,7 @@ export async function buildServer(): Promise<FastifyInstance> {
   const pobiService = new PobiService({
     db,
     socialService,
+    channelHub: openClawChannelHub,
     connectorHub: openClawConnectorHub,
     env,
     logger: app.log
@@ -128,6 +132,7 @@ export async function buildServer(): Promise<FastifyInstance> {
   app.decorate('metrics', metrics);
   app.decorate('connectionManager', connectionManager);
   app.decorate('eventBus', eventBus);
+  app.decorate('openClawChannelHub', openClawChannelHub);
   app.decorate('openClawConnectorHub', openClawConnectorHub);
   app.decorate('clawBridge', clawBridge);
   app.decorate('authService', authService);
@@ -175,6 +180,7 @@ export async function buildServer(): Promise<FastifyInstance> {
   });
 
   app.addHook('onClose', async () => {
+    app.openClawChannelHub.closeAll();
     app.openClawConnectorHub.closeAll();
     await app.eventBus.close();
     await closeRedis();

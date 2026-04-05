@@ -1,6 +1,7 @@
 import { customAlphabet } from 'nanoid';
 import type { FastifyInstance, FastifyRequest } from 'fastify';
 import { env } from '../../config/env';
+import { AppError, ErrorCodes } from '../../lib/errors';
 
 const testId = customAlphabet('abcdefghijklmnopqrstuvwxyz0123456789', 12);
 
@@ -37,6 +38,27 @@ function parseConnectorQuery(request: FastifyRequest): ConnectorQuery {
   };
 }
 
+function getRawQueryParams(request: FastifyRequest): URLSearchParams {
+  const rawUrl = request.raw.url ?? '';
+  const query = rawUrl.includes('?') ? rawUrl.split('?')[1] : '';
+  return new URLSearchParams(query);
+}
+
+function parseBearerToken(request: FastifyRequest): string | undefined {
+  const authHeader = request.headers.authorization;
+  if (!authHeader) {
+    return undefined;
+  }
+
+  const match = /^Bearer\s+(.+)$/i.exec(authHeader.trim());
+  return match?.[1]?.trim() || undefined;
+}
+
+function resolveChannelTokenFromRequest(request: FastifyRequest): string | undefined {
+  const params = getRawQueryParams(request);
+  return params.get('token') ?? parseBearerToken(request);
+}
+
 export async function openClawRoutes(app: FastifyInstance): Promise<void> {
   app.post(
     '/connectors/register',
@@ -70,6 +92,74 @@ export async function openClawRoutes(app: FastifyInstance): Promise<void> {
       };
     }
   );
+
+  app.post(
+    '/channel/register',
+    {
+      schema: {
+        tags: ['openclaw'],
+        summary: 'Register an OurHangout OpenClaw channel account using a one-time pairing code',
+        body: {
+          type: 'object',
+          required: ['pairingCode', 'deviceKey'],
+          properties: {
+            pairingCode: { type: 'string', minLength: 6, maxLength: 12 },
+            deviceKey: { type: 'string', minLength: 3, maxLength: 120 },
+            deviceName: { type: 'string', maxLength: 120 },
+            platform: { type: 'string', maxLength: 40 }
+          }
+        }
+      }
+    },
+    async (request) => {
+      const body = request.body as {
+        pairingCode: string;
+        deviceKey: string;
+        deviceName?: string;
+        platform?: string;
+      };
+      const data = await app.pobiService.registerOpenClawChannelByPairing(body);
+      return {
+        success: true,
+        data
+      };
+    }
+  );
+
+  app.get('/channel/ws', { websocket: true }, async (socket, request) => {
+    const token = resolveChannelTokenFromRequest(request);
+    if (!token) {
+      socket.close(1008, 'Unauthorized channel');
+      return;
+    }
+
+    const account = await app.pobiService.resolveOpenClawChannelByAuthToken(token);
+    if (!account) {
+      socket.close(1008, 'Unauthorized channel');
+      return;
+    }
+
+    const registration = app.openClawChannelHub.registerSession({
+      socket,
+      accountId: account.accountId,
+      pobiIds: account.pobiBindings.map((binding) => binding.pobiId),
+      botKeys: account.pobiBindings.map((binding) => binding.botKey)
+    });
+
+    void app.pobiService.markConnectorConnected(registration.accountId).catch(() => null);
+    socket.on('close', () => {
+      void app.pobiService.markConnectorDisconnected(registration.accountId).catch(() => null);
+    });
+
+    app.log.info(
+      {
+        accountId: registration.accountId,
+        pobiIds: registration.pobiIds,
+        botKeys: registration.botKeys
+      },
+      'OpenClaw channel websocket authenticated'
+    );
+  });
 
   app.get('/connector/ws', { websocket: true }, async (socket, request) => {
     const query = parseConnectorQuery(request);
@@ -128,6 +218,102 @@ export async function openClawRoutes(app: FastifyInstance): Promise<void> {
       return {
         success: true,
         data: app.openClawConnectorHub.getStatus()
+      };
+    }
+  );
+
+  app.get(
+    '/channel/status',
+    {
+      preHandler: app.authenticate,
+      schema: {
+        tags: ['openclaw'],
+        summary: 'Get connected OurHangout OpenClaw channel sessions'
+      }
+    },
+    async () => {
+      return {
+        success: true,
+        data: app.openClawChannelHub.getStatus()
+      };
+    }
+  );
+
+  app.get(
+    '/channel/messages/sync',
+    {
+      schema: {
+        tags: ['openclaw'],
+        summary: 'Sync inbound OurHangout direct-room messages for the OpenClaw channel plugin',
+        querystring: {
+          type: 'object',
+          properties: {
+            token: { type: 'string', minLength: 16, maxLength: 512 },
+            pobiId: { type: 'string', format: 'uuid' },
+            afterOrderSeq: { type: 'number', minimum: 0 },
+            limit: { type: 'number', minimum: 1, maximum: 200 }
+          }
+        }
+      }
+    },
+    async (request) => {
+      const token = resolveChannelTokenFromRequest(request);
+      const account = token ? await app.pobiService.resolveOpenClawChannelByAuthToken(token) : null;
+      if (!account) {
+        throw new AppError(401, ErrorCodes.AUTH_UNAUTHORIZED, 'Unauthorized channel');
+      }
+
+      const query = (request.query as {
+        pobiId?: string;
+        afterOrderSeq?: number;
+        limit?: number;
+      } | undefined) ?? {};
+
+      const data = await app.pobiService.listOpenClawChannelInboundMessages(account, query);
+      return {
+        success: true,
+        data
+      };
+    }
+  );
+
+  app.post(
+    '/channel/messages',
+    {
+      schema: {
+        tags: ['openclaw'],
+        summary: 'Store an outbound reply from the OpenClaw channel plugin into an OurHangout direct room',
+        body: {
+          type: 'object',
+          required: ['roomId', 'pobiId', 'text'],
+          properties: {
+            roomId: { type: 'string', format: 'uuid' },
+            pobiId: { type: 'string', format: 'uuid' },
+            text: { type: 'string', minLength: 1, maxLength: 5000 },
+            clientMessageId: { type: 'string', minLength: 1, maxLength: 128 },
+            replyToMessageId: { type: 'string', format: 'uuid' }
+          }
+        }
+      }
+    },
+    async (request) => {
+      const token = resolveChannelTokenFromRequest(request);
+      const account = token ? await app.pobiService.resolveOpenClawChannelByAuthToken(token) : null;
+      if (!account) {
+        throw new AppError(401, ErrorCodes.AUTH_UNAUTHORIZED, 'Unauthorized channel');
+      }
+
+      const body = request.body as {
+        roomId: string;
+        pobiId: string;
+        text: string;
+        clientMessageId?: string;
+        replyToMessageId?: string;
+      };
+      const data = await app.pobiService.sendOpenClawChannelMessage(account, body);
+      return {
+        success: true,
+        data
       };
     }
   );

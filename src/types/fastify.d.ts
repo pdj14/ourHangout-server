@@ -4,6 +4,7 @@ import type { MetricsRegistry } from '../lib/metrics';
 import type { ConnectionManager } from '../modules/chat/connection-manager';
 import type { RedisChatEventBus } from '../modules/chat/redis-event-bus';
 import type { ClawBridgeService } from '../modules/openclaw/claw-bridge.service';
+import type { OpenClawChannelHub } from '../modules/openclaw/channel-hub';
 import type { OpenClawConnectorHub } from '../modules/openclaw/connector-hub';
 import type { ChatService } from '../modules/chat/chat.service';
 import type { AuthService } from '../modules/auth/auth.service';
@@ -24,6 +25,7 @@ declare module 'fastify' {
     metrics: MetricsRegistry;
     connectionManager: ConnectionManager;
     eventBus: RedisChatEventBus;
+    openClawChannelHub: OpenClawChannelHub;
     openClawConnectorHub: OpenClawConnectorHub;
     clawBridge: ClawBridgeService;
     chatService: ChatService;

@@ -8,6 +8,7 @@ import { AppError, ErrorCodes } from '../../lib/errors';
 import { FcmPushService } from '../../lib/push/fcm-push.service';
 import type { ConnectionManager } from '../chat/connection-manager';
 import type { ClawBridgeService } from '../openclaw/claw-bridge.service';
+import type { OpenClawChannelHub } from '../openclaw/channel-hub';
 import type {
   FamilyRoomMemberProfileDto,
   FamilyRoomRelationshipDto,
@@ -176,6 +177,7 @@ type RoomMessageRow = {
   kind: MessageKind;
   text: string | null;
   media_url: string | null;
+  reply_to_message_id?: string | null;
   delivery: 'sent' | 'delivered' | 'read';
   created_at: Date;
   order_seq: number;
@@ -206,6 +208,14 @@ type BotRecipientRow = {
   user_id: string;
   bot_key: string;
   bot_name: string;
+};
+
+type PobiChannelBindingRow = {
+  pobi_id: string;
+  connector_key: string;
+  owner_user_id: string;
+  bot_key: string;
+  bot_user_id: string;
 };
 
 type PushRecipientRow = {
@@ -265,6 +275,7 @@ type SocialServiceDeps = {
   db: Pool;
   connectionManager: ConnectionManager;
   clawBridge: ClawBridgeService;
+  openClawChannelHub: OpenClawChannelHub;
   pushService: FcmPushService;
   logger: FastifyBaseLogger;
 };
@@ -486,6 +497,7 @@ export class SocialService {
   private readonly db: Pool;
   private readonly connectionManager: ConnectionManager;
   private readonly clawBridge: ClawBridgeService;
+  private readonly openClawChannelHub: OpenClawChannelHub;
   private readonly pushService: FcmPushService;
   private readonly logger: FastifyBaseLogger;
 
@@ -493,6 +505,7 @@ export class SocialService {
     this.db = deps.db;
     this.connectionManager = deps.connectionManager;
     this.clawBridge = deps.clawBridge;
+    this.openClawChannelHub = deps.openClawChannelHub;
     this.pushService = deps.pushService;
     this.logger = deps.logger;
   }
@@ -3162,6 +3175,7 @@ export class SocialService {
               m.kind,
               m.text,
               m.media_url,
+              m.reply_to_message_id,
               m.delivery,
               m.created_at,
               m.order_seq,
@@ -3254,6 +3268,7 @@ export class SocialService {
     text?: string;
     uri?: string;
     clientMessageId?: string;
+    replyToMessageId?: string;
   }): Promise<RoomMessageDto> {
     const room = await this.assertRoomMembership(params.roomId, params.userId);
     const memberUserIds = await this.getActiveRoomMemberIds(params.roomId);
@@ -3279,6 +3294,10 @@ export class SocialService {
       throw new AppError(400, ErrorCodes.VALIDATION_ERROR, 'uri is required for image/video message.');
     }
 
+    if (params.replyToMessageId) {
+      await this.assertReplyTargetForRoom(params.roomId, params.replyToMessageId);
+    }
+
     if (params.clientMessageId) {
       const existing = await this.db.query<RoomMessageRow>(
         `SELECT m.id,
@@ -3287,8 +3306,10 @@ export class SocialService {
                 m.kind,
                 m.text,
                 m.media_url,
+                m.reply_to_message_id,
                 m.delivery,
                 m.created_at,
+                m.order_seq,
                 u.display_name AS sender_name,
                 u.email AS sender_email
          FROM room_messages m
@@ -3306,16 +3327,18 @@ export class SocialService {
     }
 
     const insertResult = await this.db.query<RoomMessageRow>(
-      `INSERT INTO room_messages (room_id, sender_id, kind, text, media_url, client_message_id, delivery, created_at)
-       VALUES ($1, $2, $3, $4, $5, $6, 'sent', NOW())
+      `INSERT INTO room_messages (room_id, sender_id, kind, text, media_url, client_message_id, reply_to_message_id, delivery, created_at)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, 'sent', NOW())
        RETURNING id,
                  room_id,
                  sender_id,
                  kind,
                  text,
                  media_url,
+                 reply_to_message_id,
                  delivery,
                  created_at,
+                 order_seq,
                  NULL::text AS sender_name,
                  NULL::text AS sender_email`,
       [
@@ -3324,7 +3347,8 @@ export class SocialService {
         kind,
         kind === 'text' || kind === 'system' ? params.text?.trim() ?? null : null,
         kind === 'image' || kind === 'video' ? params.uri?.trim() ?? null : null,
-        params.clientMessageId ?? null
+        params.clientMessageId ?? null,
+        params.replyToMessageId ?? null
       ]
     );
 
@@ -3411,6 +3435,32 @@ export class SocialService {
         const bots = await this.findActiveBotsByUserIds(recipientIds);
         for (const bot of bots) {
           if (!this.shouldForwardToBot(room.type, finalMessage, bot)) {
+            continue;
+          }
+
+          const channelBinding =
+            room.type === 'direct' ? await this.findPobiChannelBindingByBotUserId(bot.user_id) : null;
+          if (channelBinding && this.openClawChannelHub.hasActiveSessionForPobi(channelBinding.pobi_id)) {
+            this.openClawChannelHub.publishMessageEvent({
+              event: 'ourhangout.message',
+              data: {
+                accountId: channelBinding.connector_key,
+                sessionKey: this.makeDirectPobiSessionKey(params.roomId, channelBinding.pobi_id),
+                roomId: params.roomId,
+                roomType: 'direct',
+                pobiId: channelBinding.pobi_id,
+                botKey: channelBinding.bot_key,
+                botUserId: channelBinding.bot_user_id,
+                senderUserId: params.userId,
+                messageId: finalMessage.id,
+                kind: finalMessage.kind,
+                ...(finalMessage.text ? { text: finalMessage.text } : {}),
+                ...(finalMessage.uri ? { uri: finalMessage.uri } : {}),
+                ...(finalMessage.replyToMessageId ? { replyToMessageId: finalMessage.replyToMessageId } : {}),
+                orderSeq: finalMessage.orderSeq ?? 0,
+                createdAt: finalMessage.at
+              }
+            });
             continue;
           }
 
@@ -3800,6 +3850,48 @@ export class SocialService {
     return false;
   }
 
+  private async assertReplyTargetForRoom(roomId: string, replyToMessageId: string): Promise<void> {
+    const result = await this.db.query<{ exists: boolean }>(
+      `SELECT EXISTS(
+         SELECT 1
+         FROM room_messages
+         WHERE id = $1
+           AND room_id = $2
+       ) AS exists`,
+      [replyToMessageId, roomId]
+    );
+
+    if (!(result.rows[0]?.exists ?? false)) {
+      throw new AppError(404, ErrorCodes.RESOURCE_NOT_FOUND, 'Reply target message not found in this room.');
+    }
+  }
+
+  private makeDirectPobiSessionKey(roomId: string, pobiId: string): string {
+    return `ourhangout:direct:${roomId}:${pobiId}`;
+  }
+
+  private async findPobiChannelBindingByBotUserId(botUserId: string): Promise<PobiChannelBindingRow | null> {
+    const result = await this.db.query<PobiChannelBindingRow>(
+      `SELECT p.id AS pobi_id,
+              c.connector_key,
+              p.owner_user_id,
+              b.bot_key,
+              b.user_id AS bot_user_id
+       FROM bots b
+       INNER JOIN pobis p ON p.bot_id = b.id
+       INNER JOIN openclaw_connector_pobis cp ON cp.pobi_id = p.id
+       INNER JOIN openclaw_connectors c ON c.id = cp.connector_id
+       WHERE b.user_id = $1
+         AND b.is_active = TRUE
+         AND p.is_active = TRUE
+         AND c.status <> 'revoked'
+       LIMIT 1`,
+      [botUserId]
+    );
+
+    return result.rows[0] ?? null;
+  }
+
   private async forwardToClawAndBroadcast(params: {
     room: RoomRow;
     sourceMessage: RoomMessageDto;
@@ -3829,19 +3921,21 @@ export class SocialService {
       }
 
       const insertResult = await this.db.query<RoomMessageRow>(
-        `INSERT INTO room_messages (room_id, sender_id, kind, text, media_url, delivery, created_at)
-         VALUES ($1, $2, 'text', $3, NULL, 'sent', NOW())
+        `INSERT INTO room_messages (room_id, sender_id, kind, text, media_url, reply_to_message_id, delivery, created_at)
+         VALUES ($1, $2, 'text', $3, NULL, $4, 'sent', NOW())
          RETURNING id,
                    room_id,
                    sender_id,
                    kind,
                    text,
                    media_url,
+                   reply_to_message_id,
                    delivery,
                    created_at,
+                   order_seq,
                    NULL::text AS sender_name,
                    NULL::text AS sender_email`,
-        [params.room.id, params.botUserId, response.replyText.trim()]
+        [params.room.id, params.botUserId, response.replyText.trim(), sourceMessage.id]
       );
 
       await this.db.query(
@@ -3930,6 +4024,7 @@ export class SocialService {
               m.kind,
               m.text,
               m.media_url,
+              m.reply_to_message_id,
               m.delivery,
               m.created_at,
               m.order_seq,
@@ -4114,8 +4209,10 @@ export class SocialService {
       kind: row.kind,
       ...(row.text ? { text: row.text } : {}),
       ...(row.media_url ? { uri: row.media_url } : {}),
+      ...(row.reply_to_message_id ? { replyToMessageId: row.reply_to_message_id } : {}),
       at: row.created_at.toISOString(),
       delivery: row.delivery,
+      ...(typeof row.order_seq === 'number' ? { orderSeq: row.order_seq } : {}),
       ...(typeof row.unread_count === 'number' ? { unreadCount: row.unread_count } : {}),
       ...(Array.isArray(row.read_by_names) && row.read_by_names.length > 0 ? { readByNames: row.read_by_names } : {})
     };

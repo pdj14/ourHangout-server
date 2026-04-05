@@ -3,8 +3,10 @@ import type { FastifyBaseLogger } from 'fastify';
 import type { Pool, PoolClient } from 'pg';
 import { AppError, ErrorCodes } from '../../lib/errors';
 import type { AppEnv } from '../../config/env';
+import type { OpenClawChannelHub } from '../openclaw/channel-hub';
 import type { OpenClawConnectorHub } from '../openclaw/connector-hub';
 import type { SocialService } from '../social/social.service';
+import type { RoomMessageDto } from '../social/social.types';
 import type { PobiOpenClawInfo, PobiOpenClawPairingResult, PobiRoomResult, PobiSummary } from './pobi.types';
 import { customAlphabet } from 'nanoid';
 
@@ -29,9 +31,39 @@ type ConnectorRow = {
   owner_user_id: string;
   connector_key: string;
   device_name: string | null;
+  platform?: string | null;
   status: 'pending' | 'online' | 'offline' | 'revoked';
   connected_at: Date | null;
   last_seen_at: Date | null;
+};
+
+type ChannelAccountBindingRow = {
+  connector_db_id: string;
+  account_id: string;
+  owner_user_id: string;
+  device_name: string | null;
+  platform: string | null;
+  status: 'pending' | 'online' | 'offline' | 'revoked';
+  connected_at: Date | null;
+  last_seen_at: Date | null;
+  pobi_id: string;
+  bot_key: string;
+  bot_user_id: string;
+};
+
+type ChannelInboundMessageRow = {
+  message_id: string;
+  room_id: string;
+  sender_user_id: string;
+  kind: 'text' | 'image' | 'video' | 'system';
+  text: string | null;
+  media_url: string | null;
+  reply_to_message_id?: string | null;
+  created_at: Date;
+  order_seq: number;
+  pobi_id: string;
+  bot_key: string;
+  bot_user_id: string;
 };
 
 type PairingRow = {
@@ -48,6 +80,7 @@ type PairingRow = {
 type PobiServiceDeps = {
   db: Pool;
   socialService: SocialService;
+  channelHub: OpenClawChannelHub;
   connectorHub: OpenClawConnectorHub;
   env: AppEnv;
   logger: FastifyBaseLogger;
@@ -59,6 +92,7 @@ const connectorPairingCodeGenerator = customAlphabet('ABCDEFGHJKLMNPQRSTUVWXYZ23
 export class PobiService {
   private readonly db: Pool;
   private readonly socialService: SocialService;
+  private readonly channelHub: OpenClawChannelHub;
   private readonly connectorHub: OpenClawConnectorHub;
   private readonly env: AppEnv;
   private readonly logger: FastifyBaseLogger;
@@ -66,6 +100,7 @@ export class PobiService {
   constructor(deps: PobiServiceDeps) {
     this.db = deps.db;
     this.socialService = deps.socialService;
+    this.channelHub = deps.channelHub;
     this.connectorHub = deps.connectorHub;
     this.env = deps.env;
     this.logger = deps.logger;
@@ -391,9 +426,10 @@ export class PobiService {
   async getOpenClawInfo(ownerUserId: string, pobiId: string): Promise<PobiOpenClawInfo> {
     const pobi = await this.getPobiByIdForOwner(ownerUserId, pobiId);
     const matchedConnectors = this.connectorHub.getConnectorsForBotKey(pobi.botKey);
+    const matchedChannels = this.channelHub.getSessionsForPobi(pobi.id);
     const connector = await this.getConnectorForPobi(pobi.id);
     const pairing = await this.getPendingPairingForPobi(ownerUserId, pobi.id);
-    const connected = matchedConnectors.length > 0;
+    const connected = matchedConnectors.length > 0 || matchedChannels.length > 0;
     const status: 'connected' | 'pairing_pending' | 'not_connected' = connected
       ? 'connected'
       : pairing
@@ -415,9 +451,295 @@ export class PobiService {
           wildcard: connector.wildcard,
           botKeys: connector.botKeys,
           lastSeenAt: connector.lastSeenAt
+        })),
+        matchedChannels: matchedChannels.map((channel) => ({
+          accountId: channel.accountId,
+          pobiIds: channel.pobiIds,
+          botKeys: channel.botKeys,
+          lastSeenAt: channel.lastSeenAt
         }))
       }
     };
+  }
+
+  async registerOpenClawChannelByPairing(input: {
+    pairingCode: string;
+    deviceKey: string;
+    deviceName?: string;
+    platform?: string;
+  }): Promise<{
+    accountId: string;
+    ownerUserId: string;
+    pobiId: string;
+    botKey: string;
+    authToken: string;
+    wsUrl: string;
+    syncUrl: string;
+    messagesUrl: string;
+    sessionKeyPrefix: string;
+  }> {
+    const registered = await this.registerOpenClawConnectorByPairing({
+      pairingCode: input.pairingCode,
+      connectorKey: input.deviceKey,
+      deviceName: input.deviceName,
+      platform: input.platform
+    });
+
+    const httpBaseUrl = this.getOpenClawHttpBaseUrl();
+
+    return {
+      accountId: registered.connectorId,
+      ownerUserId: registered.ownerUserId,
+      pobiId: registered.pobiId,
+      botKey: registered.botKey,
+      authToken: registered.connectorAuthToken,
+      wsUrl: this.getOpenClawChannelWsUrl(),
+      syncUrl: `${httpBaseUrl}/v1/openclaw/channel/messages/sync`,
+      messagesUrl: `${httpBaseUrl}/v1/openclaw/channel/messages`,
+      sessionKeyPrefix: 'ourhangout:direct'
+    };
+  }
+
+  async resolveOpenClawChannelByAuthToken(token: string): Promise<{
+    connectorDbId: string;
+    accountId: string;
+    ownerUserId: string;
+    deviceName?: string;
+    platform?: string;
+    status: 'pending' | 'online' | 'offline' | 'revoked';
+    connectedAt?: string;
+    lastSeenAt?: string;
+    pobiBindings: Array<{
+      pobiId: string;
+      botKey: string;
+      botUserId: string;
+    }>;
+  } | null> {
+    const trimmed = token.trim();
+    if (!trimmed) {
+      return null;
+    }
+
+    const tokenHash = this.hashConnectorToken(trimmed);
+    const result = await this.db.query<ChannelAccountBindingRow>(
+      `SELECT c.id AS connector_db_id,
+              c.connector_key AS account_id,
+              c.owner_user_id,
+              c.device_name,
+              c.platform,
+              c.status,
+              c.connected_at,
+              c.last_seen_at,
+              p.id AS pobi_id,
+              b.bot_key,
+              b.user_id AS bot_user_id
+       FROM openclaw_connectors c
+       INNER JOIN openclaw_connector_pobis cp ON cp.connector_id = c.id
+       INNER JOIN pobis p ON p.id = cp.pobi_id
+       INNER JOIN bots b ON b.id = p.bot_id
+       WHERE c.auth_token_hash = $1
+         AND c.status <> 'revoked'
+       ORDER BY cp.created_at ASC`,
+      [tokenHash]
+    );
+
+    if (result.rows.length === 0) {
+      return null;
+    }
+
+    const first = result.rows[0];
+    return {
+      connectorDbId: first.connector_db_id,
+      accountId: first.account_id,
+      ownerUserId: first.owner_user_id,
+      ...(first.device_name ? { deviceName: first.device_name } : {}),
+      ...(first.platform ? { platform: first.platform } : {}),
+      status: first.status,
+      ...(first.connected_at ? { connectedAt: first.connected_at.toISOString() } : {}),
+      ...(first.last_seen_at ? { lastSeenAt: first.last_seen_at.toISOString() } : {}),
+      pobiBindings: result.rows.map((row) => ({
+        pobiId: row.pobi_id,
+        botKey: row.bot_key,
+        botUserId: row.bot_user_id
+      }))
+    };
+  }
+
+  async listOpenClawChannelInboundMessages(
+    account: {
+      connectorDbId: string;
+      accountId: string;
+      pobiBindings: Array<{
+        pobiId: string;
+        botKey: string;
+        botUserId: string;
+      }>;
+    },
+    params: {
+      afterOrderSeq?: number;
+      limit?: number;
+      pobiId?: string;
+    }
+  ): Promise<{
+    items: Array<{
+      accountId: string;
+      sessionKey: string;
+      roomId: string;
+      roomType: 'direct';
+      pobiId: string;
+      botKey: string;
+      botUserId: string;
+      senderUserId: string;
+      messageId: string;
+      kind: 'text' | 'image' | 'video' | 'system';
+      text?: string;
+      uri?: string;
+      replyToMessageId?: string;
+      orderSeq: number;
+      createdAt: string;
+    }>;
+    nextAfterOrderSeq: number;
+    hasMore: boolean;
+  }> {
+    const allowedPobiIds = new Set(account.pobiBindings.map((binding) => binding.pobiId));
+    if (params.pobiId && !allowedPobiIds.has(params.pobiId)) {
+      throw new AppError(403, ErrorCodes.FORBIDDEN, 'Pobi is not linked to this OpenClaw channel account.');
+    }
+
+    const afterOrderSeq =
+      typeof params.afterOrderSeq === 'number' && Number.isFinite(params.afterOrderSeq)
+        ? Math.max(0, Math.floor(params.afterOrderSeq))
+        : 0;
+    const limit =
+      typeof params.limit === 'number' && Number.isFinite(params.limit)
+        ? Math.min(200, Math.max(1, Math.floor(params.limit)))
+        : 50;
+
+    const bindings = params.pobiId ? [params.pobiId] : Array.from(allowedPobiIds);
+    if (bindings.length === 0) {
+      return {
+        items: [],
+        nextAfterOrderSeq: afterOrderSeq,
+        hasMore: false
+      };
+    }
+
+    const result = await this.db.query<ChannelInboundMessageRow>(
+      `SELECT rm.id AS message_id,
+              rm.room_id,
+              rm.sender_id AS sender_user_id,
+              rm.kind,
+              rm.text,
+              rm.media_url,
+              rm.reply_to_message_id,
+              rm.created_at,
+              rm.order_seq,
+              p.id AS pobi_id,
+              b.bot_key,
+              b.user_id AS bot_user_id
+       FROM openclaw_connector_pobis cp
+       INNER JOIN pobis p ON p.id = cp.pobi_id
+       INNER JOIN bots b ON b.id = p.bot_id
+       INNER JOIN room_members bot_member
+               ON bot_member.user_id = b.user_id
+              AND bot_member.left_at IS NULL
+       INNER JOIN rooms r
+               ON r.id = bot_member.room_id
+              AND r.type = 'direct'
+              AND r.deleted_at IS NULL
+       INNER JOIN room_messages rm
+               ON rm.room_id = r.id
+              AND rm.sender_id IS NOT NULL
+              AND rm.sender_id <> b.user_id
+       WHERE cp.connector_id = $1
+         AND cp.pobi_id = ANY($2::uuid[])
+         AND rm.order_seq > $3
+       ORDER BY rm.order_seq ASC
+       LIMIT $4`,
+      [account.connectorDbId, bindings, afterOrderSeq, limit + 1]
+    );
+
+    const hasMore = result.rows.length > limit;
+    const rows = hasMore ? result.rows.slice(0, limit) : result.rows;
+    const items = rows.map((row) => ({
+      accountId: account.accountId,
+      sessionKey: this.makeDirectSessionKey(row.room_id, row.pobi_id),
+      roomId: row.room_id,
+      roomType: 'direct' as const,
+      pobiId: row.pobi_id,
+      botKey: row.bot_key,
+      botUserId: row.bot_user_id,
+      senderUserId: row.sender_user_id,
+      messageId: row.message_id,
+      kind: row.kind,
+      ...(row.text ? { text: row.text } : {}),
+      ...(row.media_url ? { uri: row.media_url } : {}),
+      ...(row.reply_to_message_id ? { replyToMessageId: row.reply_to_message_id } : {}),
+      orderSeq: row.order_seq,
+      createdAt: row.created_at.toISOString()
+    }));
+
+    return {
+      items,
+      nextAfterOrderSeq: items.length > 0 ? items[items.length - 1].orderSeq : afterOrderSeq,
+      hasMore
+    };
+  }
+
+  async sendOpenClawChannelMessage(
+    account: {
+      pobiBindings: Array<{
+        pobiId: string;
+        botKey: string;
+        botUserId: string;
+      }>;
+    },
+    input: {
+      roomId: string;
+      pobiId: string;
+      text: string;
+      clientMessageId?: string;
+      replyToMessageId?: string;
+    }
+  ): Promise<RoomMessageDto> {
+    const binding = account.pobiBindings.find((candidate) => candidate.pobiId === input.pobiId);
+    if (!binding) {
+      throw new AppError(403, ErrorCodes.FORBIDDEN, 'Pobi is not linked to this OpenClaw channel account.');
+    }
+
+    const text = input.text.trim();
+    if (text.length === 0 || text.length > 5000) {
+      throw new AppError(400, ErrorCodes.VALIDATION_ERROR, 'Message text must be 1-5000 characters.');
+    }
+
+    const membership = await this.db.query<{
+      exists: boolean;
+    }>(
+      `SELECT EXISTS(
+         SELECT 1
+         FROM rooms r
+         INNER JOIN room_members rm ON rm.room_id = r.id
+         WHERE r.id = $1
+           AND r.type = 'direct'
+           AND r.deleted_at IS NULL
+           AND rm.user_id = $2
+           AND rm.left_at IS NULL
+       ) AS exists`,
+      [input.roomId, binding.botUserId]
+    );
+
+    if (!(membership.rows[0]?.exists ?? false)) {
+      throw new AppError(404, ErrorCodes.RESOURCE_NOT_FOUND, 'Direct room not found for linked Pobi.');
+    }
+
+    return this.socialService.sendRoomMessage({
+      userId: binding.botUserId,
+      roomId: input.roomId,
+      clientMessageId: input.clientMessageId,
+      kind: 'text',
+      text,
+      replyToMessageId: input.replyToMessageId
+    });
   }
 
   async registerOpenClawConnectorByPairing(input: {
@@ -714,6 +1036,10 @@ export class PobiService {
     return createHash('sha256').update(token).digest('hex');
   }
 
+  private makeDirectSessionKey(roomId: string, pobiId: string): string {
+    return `ourhangout:direct:${roomId}:${pobiId}`;
+  }
+
   private normalizeTheme(theme?: string): string {
     const normalized = (theme || '').trim().toLowerCase();
     if (!normalized) {
@@ -727,8 +1053,12 @@ export class PobiService {
     return normalized;
   }
 
+  private getOpenClawHttpBaseUrl(): string {
+    return this.env.PUBLIC_BASE_URL.replace(/\/+$/, '');
+  }
+
   private getOpenClawWsUrl(): string {
-    const baseUrl = this.env.PUBLIC_BASE_URL.replace(/\/+$/, '');
+    const baseUrl = this.getOpenClawHttpBaseUrl();
     if (/^https:/i.test(baseUrl)) {
       return `${baseUrl.replace(/^https:/i, 'wss:')}/v1/openclaw/connector/ws`;
     }
@@ -736,6 +1066,17 @@ export class PobiService {
       return `${baseUrl.replace(/^http:/i, 'ws:')}/v1/openclaw/connector/ws`;
     }
     return `${baseUrl}/v1/openclaw/connector/ws`;
+  }
+
+  private getOpenClawChannelWsUrl(): string {
+    const baseUrl = this.getOpenClawHttpBaseUrl();
+    if (/^https:/i.test(baseUrl)) {
+      return `${baseUrl.replace(/^https:/i, 'wss:')}/v1/openclaw/channel/ws`;
+    }
+    if (/^http:/i.test(baseUrl)) {
+      return `${baseUrl.replace(/^http:/i, 'ws:')}/v1/openclaw/channel/ws`;
+    }
+    return `${baseUrl}/v1/openclaw/channel/ws`;
   }
 
   private mapPobi(row: PobiRow): PobiSummary {
