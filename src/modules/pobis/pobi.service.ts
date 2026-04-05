@@ -344,6 +344,15 @@ export class PobiService {
     ttlSeconds = 600
   ): Promise<PobiOpenClawPairingResult> {
     const pobi = await this.getPobiByIdForOwner(ownerUserId, pobiId);
+    const existingPairing = await this.getPendingPairingForPobi(ownerUserId, pobiId);
+    if (existingPairing) {
+      return {
+        pairingCode: existingPairing.pairing_code,
+        expiresAt: existingPairing.expires_at.toISOString(),
+        pobi
+      };
+    }
+
     const effectiveTtlSeconds = Math.max(60, Math.min(3600, Math.floor(ttlSeconds)));
     const expiresAt = new Date(Date.now() + effectiveTtlSeconds * 1000);
 
@@ -351,7 +360,8 @@ export class PobiService {
       `DELETE FROM openclaw_connector_pairings
        WHERE owner_user_id = $1
          AND pobi_id = $2
-         AND consumed_at IS NULL`,
+         AND consumed_at IS NULL
+         AND expires_at <= NOW()`,
       [ownerUserId, pobiId]
     );
 
