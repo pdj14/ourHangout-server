@@ -125,6 +125,8 @@ Notes:
 
 - Script aborts if the git worktree is dirty.
 - If you really need to deploy with local changes, run `ALLOW_DIRTY=1 bash scripts/deploy-dev.sh` (or `deploy-main.sh`).
+- On Synology, if `git` is installed outside the default `PATH`, rerun with `GIT_BIN=/usr/local/bin/git bash scripts/deploy-main.sh`.
+- These deploy scripts require the project directory itself to be a real `git clone` with a `.git` directory.
 - Required directories are created automatically: `logs`, `storage/media`, `storage/app-updates`.
 
 ## 4) Synology NAS deployment (Container Manager)
