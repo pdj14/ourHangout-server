@@ -466,7 +466,7 @@ Set:
 
 ```env
 OPENCLAW_MODE=http
-OPENCLAW_BASE_URL=http://127.0.0.1:18888
+OPENCLAW_BASE_URL=http://127.0.0.1:18789
 ```
 
 If endpoint unavailable, backend logs contain provider error with retry attempts and final upstream error code.

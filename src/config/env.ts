@@ -35,7 +35,7 @@ const envSchema = z.object({
   RATE_LIMIT_REDIS_NAMESPACE: z.string().default('ourhangout-rate-limit-'),
   RATE_LIMIT_SKIP_ON_ERROR: z.string().default('true'),
   OPENCLAW_MODE: z.enum(['mock', 'http', 'connector']).default('mock'),
-  OPENCLAW_BASE_URL: z.string().url().default('http://127.0.0.1:18888'),
+  OPENCLAW_BASE_URL: z.string().url().default('http://127.0.0.1:18789'),
   OPENCLAW_CONNECTOR_TOKEN: z.string().default('replace-openclaw-connector-token'),
   OPENCLAW_CONNECTOR_TOKEN_FILE: z.string().default('storage/openclaw/connector-token.txt'),
   OPENCLAW_TIMEOUT_MS: z.coerce.number().int().positive().default(3000),

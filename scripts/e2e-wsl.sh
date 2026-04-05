@@ -3,7 +3,7 @@ set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 MODE="${1:-mock}"
-HTTP_BASE_URL="${2:-http://127.0.0.1:18888}"
+HTTP_BASE_URL="${2:-http://127.0.0.1:18789}"
 WS_LOG_FILE=""
 WS_PID=""
 BACKUP_ENV_FILE=""
@@ -17,7 +17,7 @@ Usage:
 
 Examples:
   bash scripts/e2e-wsl.sh mock
-  bash scripts/e2e-wsl.sh http-error http://127.0.0.1:18888
+  bash scripts/e2e-wsl.sh http-error http://127.0.0.1:18789
 EOF
 }
 

@@ -39,14 +39,14 @@ JWT_SECRET=<32자 이상 랜덤 문자열>
 POSTGRES_PASSWORD=<강한 비밀번호>
 CORS_ORIGINS=http://<APP_HOST_OR_DOMAIN>
 OPENCLAW_MODE=mock
-OPENCLAW_BASE_URL=http://127.0.0.1:18888
+OPENCLAW_BASE_URL=http://127.0.0.1:18789
 ```
 
 주의:
 
 1. `OPENCLAW_MODE=mock`부터 먼저 검증하세요.
 2. `OPENCLAW_MODE=http`로 전환할 때 `OPENCLAW_BASE_URL`은 NAS에서 실제로 접근 가능한 주소여야 합니다.
-3. 개발 PC의 `adb forward`로 연 포트(`127.0.0.1:18888`)는 NAS에서 접근 불가입니다.
+3. 개발 PC의 `adb forward`로 연 포트(`127.0.0.1:18789`)는 NAS에서 접근 불가입니다.
 
 ## 3) 프로젝트 실행 방식 선택
 
@@ -131,14 +131,14 @@ node dist/scripts/seed.js
 
 ```env
 OPENCLAW_MODE=http
-OPENCLAW_BASE_URL=http://<OPENCLAW_DEVICE_IP>:18888
+OPENCLAW_BASE_URL=http://<OPENCLAW_DEVICE_IP>:18789
 OPENCLAW_TIMEOUT_MS=3000
 OPENCLAW_RETRY_COUNT=2
 ```
 
 중요:
 
-1. NAS가 `<OPENCLAW_DEVICE_IP>:18888`에 실제 TCP 접근 가능해야 합니다.
+1. NAS가 `<OPENCLAW_DEVICE_IP>:18789`에 실제 TCP 접근 가능해야 합니다.
 2. 접근 불가 시 `/ready`가 503이 될 수 있고, API 로그에 `OPENCLAW_UPSTREAM_ERROR`가 남습니다.
 
 ## 8) 운영 보안 권장

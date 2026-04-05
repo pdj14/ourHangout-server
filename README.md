@@ -227,7 +227,7 @@ HTTP provider failure check:
 
 ```bash
 cd /mnt/c/workspace/ourHome/ourhangout-backend
-bash scripts/e2e-wsl.sh http-error http://127.0.0.1:18888
+bash scripts/e2e-wsl.sh http-error http://127.0.0.1:18789
 ```
 
 Extended flow check (pairing relationship + phone contact match + password security):
