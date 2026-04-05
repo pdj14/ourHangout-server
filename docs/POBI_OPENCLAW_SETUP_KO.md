@@ -52,6 +52,29 @@ npm run migrate
 
 - `.env`에 `DATABASE_URL`, `REDIS_URL`, `JWT_SECRET`가 있어야 합니다
 
+### 3.2.1 connector token
+
+`OPENCLAW_CONNECTOR_TOKEN`은 이제 아래처럼 둘 수 있습니다.
+
+```env
+OPENCLAW_CONNECTOR_TOKEN=replace-openclaw-connector-token
+OPENCLAW_CONNECTOR_TOKEN_FILE=storage/openclaw/connector-token.txt
+```
+
+동작:
+
+- 실제 token 값을 넣으면 그 값을 그대로 사용
+- 비워 두거나 placeholder 값을 두면 서버가 자동 생성
+- 자동 생성된 값은 `OPENCLAW_CONNECTOR_TOKEN_FILE` 경로에 저장
+- 이후 재시작해도 같은 token 재사용
+
+현재 유효한 token 확인:
+
+```bash
+cd C:/workspace/ourHangoutFamily/ourHangout-server
+npm run connector:token
+```
+
 ### 3.3 서버 실행
 
 ```bash

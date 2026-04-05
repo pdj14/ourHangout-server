@@ -1,4 +1,7 @@
+import { randomBytes } from 'crypto';
 import dotenv from 'dotenv';
+import fs from 'fs';
+import path from 'path';
 import { z } from 'zod';
 
 dotenv.config();
@@ -34,6 +37,7 @@ const envSchema = z.object({
   OPENCLAW_MODE: z.enum(['mock', 'http', 'connector']).default('mock'),
   OPENCLAW_BASE_URL: z.string().url().default('http://127.0.0.1:18888'),
   OPENCLAW_CONNECTOR_TOKEN: z.string().default('replace-openclaw-connector-token'),
+  OPENCLAW_CONNECTOR_TOKEN_FILE: z.string().default('storage/openclaw/connector-token.txt'),
   OPENCLAW_TIMEOUT_MS: z.coerce.number().int().positive().default(3000),
   OPENCLAW_RETRY_COUNT: z.coerce.number().int().min(0).default(2),
   PAIRING_CODE_TTL_SECONDS: z.coerce.number().int().positive().default(300),
@@ -86,6 +90,66 @@ function parseTrustProxy(value: string): boolean | number | string[] {
   return asList.length > 0 ? asList : false;
 }
 
+function resolveConnectorTokenFile(filePath: string): string {
+  const trimmed = filePath.trim();
+  if (!trimmed) {
+    return path.resolve(process.cwd(), 'storage/openclaw/connector-token.txt');
+  }
+
+  return path.isAbsolute(trimmed) ? trimmed : path.resolve(process.cwd(), trimmed);
+}
+
+function isPlaceholderConnectorToken(value: string): boolean {
+  const trimmed = value.trim();
+  return trimmed.length === 0 || trimmed === 'replace-openclaw-connector-token';
+}
+
+function loadOrCreateConnectorToken(explicitToken: string, filePath: string): {
+  token: string;
+  filePath: string;
+  source: 'env' | 'file';
+} {
+  const resolvedFilePath = resolveConnectorTokenFile(filePath);
+  const trimmedExplicitToken = explicitToken.trim();
+
+  if (!isPlaceholderConnectorToken(trimmedExplicitToken)) {
+    return {
+      token: trimmedExplicitToken,
+      filePath: resolvedFilePath,
+      source: 'env'
+    };
+  }
+
+  try {
+    const existing = fs.readFileSync(resolvedFilePath, 'utf8').trim();
+    if (existing.length >= 16) {
+      return {
+        token: existing,
+        filePath: resolvedFilePath,
+        source: 'file'
+      };
+    }
+  } catch {
+    // generate below
+  }
+
+  const generated = randomBytes(32).toString('hex');
+  fs.mkdirSync(path.dirname(resolvedFilePath), { recursive: true });
+  fs.writeFileSync(resolvedFilePath, `${generated}\n`, { encoding: 'utf8' });
+  console.info(`[openclaw] Generated connector token at ${resolvedFilePath}`);
+
+  return {
+    token: generated,
+    filePath: resolvedFilePath,
+    source: 'file'
+  };
+}
+
+const connectorToken = loadOrCreateConnectorToken(
+  rawEnv.OPENCLAW_CONNECTOR_TOKEN,
+  rawEnv.OPENCLAW_CONNECTOR_TOKEN_FILE
+);
+
 export const env = {
   ...rawEnv,
   PUBLIC_BASE_URL: rawEnv.PUBLIC_BASE_URL.trim() || `http://localhost:${rawEnv.PORT}`,
@@ -105,7 +169,10 @@ export const env = {
       ].filter(Boolean)
     )
   ),
-  RATE_LIMIT_SKIP_ON_ERROR: parseBoolean(rawEnv.RATE_LIMIT_SKIP_ON_ERROR, true)
+  RATE_LIMIT_SKIP_ON_ERROR: parseBoolean(rawEnv.RATE_LIMIT_SKIP_ON_ERROR, true),
+  OPENCLAW_CONNECTOR_TOKEN: connectorToken.token,
+  OPENCLAW_CONNECTOR_TOKEN_FILE: connectorToken.filePath,
+  OPENCLAW_CONNECTOR_TOKEN_SOURCE: connectorToken.source
 };
 
 export type AppEnv = typeof env;
