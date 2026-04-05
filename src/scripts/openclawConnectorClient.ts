@@ -31,29 +31,16 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 }
 
 const hubWsBase = process.env.HUB_WS_URL ?? 'ws://localhost:3000/v1/openclaw/connector/ws';
-const connectorToken = process.env.OPENCLAW_CONNECTOR_TOKEN ?? '';
+let connectorToken = process.env.CONNECTOR_AUTH_TOKEN ?? process.env.OPENCLAW_CONNECTOR_TOKEN ?? '';
 const connectorId = process.env.CONNECTOR_ID ?? `connector-local-${Date.now()}`;
-const botKeys = process.env.CONNECTOR_BOT_KEYS ?? '*';
+const pairingCode = process.env.PAIRING_CODE ?? '';
+const connectorDeviceName = process.env.CONNECTOR_DEVICE_NAME ?? process.env.DEVICE_NAME ?? connectorId;
+let botKeys = process.env.CONNECTOR_BOT_KEYS ?? '*';
 const mode = (process.env.CONNECTOR_MODE ?? 'mock').toLowerCase();
 const localOpenClawBaseUrl = process.env.OPENCLAW_LOCAL_BASE_URL ?? 'http://127.0.0.1:18888';
 const reconnectDelayMs = Number(process.env.CONNECTOR_RECONNECT_MS ?? 3000);
 const timeoutMs = Number(process.env.CONNECTOR_REQUEST_TIMEOUT_MS ?? 4000);
-
-if (!connectorToken || connectorToken.length < 8) {
-  throw new Error('OPENCLAW_CONNECTOR_TOKEN is required.');
-}
-
-const botKeyQuery = botKeys
-  .split(',')
-  .map((value) => value.trim())
-  .filter(Boolean)
-  .map((value) => `botKey=${encodeURIComponent(value)}`)
-  .join('&');
-
-const query = `token=${encodeURIComponent(connectorToken)}&connectorId=${encodeURIComponent(connectorId)}${
-  botKeyQuery ? `&${botKeyQuery}` : ''
-}`;
-const wsUrl = `${hubWsBase}${hubWsBase.includes('?') ? '&' : '?'}${query}`;
+let wsUrl = '';
 
 async function callLocalOpenClaw(content: string, botKey?: string): Promise<{ providerMessageId?: string; replyText?: string; raw?: unknown }> {
   const controller = new AbortController();
@@ -134,6 +121,95 @@ async function handleRequest(payload: RequestPayload): Promise<ResponsePayload> 
   }
 }
 
+function buildWebSocketUrl(token: string, currentBotKeys: string, baseUrl = hubWsBase): string {
+  const botKeyQuery = currentBotKeys
+    .split(',')
+    .map((value) => value.trim())
+    .filter(Boolean)
+    .map((value) => `botKey=${encodeURIComponent(value)}`)
+    .join('&');
+
+  const query = `token=${encodeURIComponent(token)}&connectorId=${encodeURIComponent(connectorId)}${
+    botKeyQuery ? `&${botKeyQuery}` : ''
+  }`;
+
+  return `${baseUrl}${baseUrl.includes('?') ? '&' : '?'}${query}`;
+}
+
+function deriveRegisterBaseUrl(): string {
+  const trimmed = hubWsBase.trim();
+  if (/^wss:/i.test(trimmed)) {
+    return trimmed.replace(/^wss:/i, 'https:').replace(/\/v1\/openclaw\/connector\/ws.*$/i, '');
+  }
+  if (/^ws:/i.test(trimmed)) {
+    return trimmed.replace(/^ws:/i, 'http:').replace(/\/v1\/openclaw\/connector\/ws.*$/i, '');
+  }
+  if (/^https?:/i.test(trimmed)) {
+    return trimmed.replace(/\/v1\/openclaw\/connector\/ws.*$/i, '');
+  }
+  throw new Error('Unable to derive register base URL from HUB_WS_URL.');
+}
+
+async function registerConnectorByPairing(): Promise<void> {
+  if (!pairingCode.trim()) {
+    return;
+  }
+
+  const registerBaseUrl = deriveRegisterBaseUrl();
+  const response = await fetch(`${registerBaseUrl}/v1/openclaw/connectors/register`, {
+    method: 'POST',
+    headers: {
+      'content-type': 'application/json'
+    },
+    body: JSON.stringify({
+      pairingCode: pairingCode.trim().toUpperCase(),
+      connectorKey: connectorId,
+      deviceName: connectorDeviceName,
+      platform: 'linux'
+    })
+  });
+
+  const text = await response.text();
+  let parsed: unknown = {};
+  try {
+    parsed = JSON.parse(text);
+  } catch {
+    // keep empty object
+  }
+
+  if (!response.ok) {
+    throw new Error(`Connector register failed (${response.status})`);
+  }
+
+  const envelope = isRecord(parsed) ? parsed : {};
+  const data = isRecord(envelope.data) ? envelope.data : envelope;
+  const nextToken = typeof data.connectorAuthToken === 'string' ? data.connectorAuthToken.trim() : '';
+  const nextBotKey = typeof data.botKey === 'string' ? data.botKey.trim() : '';
+  const nextWsUrl = typeof data.wsUrl === 'string' ? data.wsUrl.trim() : '';
+
+  if (!nextToken) {
+    throw new Error('Connector register response did not include connectorAuthToken.');
+  }
+
+  connectorToken = nextToken;
+  if (nextBotKey) {
+    botKeys = nextBotKey;
+  }
+  wsUrl = buildWebSocketUrl(connectorToken, botKeys, nextWsUrl || hubWsBase);
+}
+
+async function ensureConnectorConfig(): Promise<void> {
+  if (!connectorToken.trim() && pairingCode.trim()) {
+    await registerConnectorByPairing();
+  }
+
+  if (!connectorToken.trim() || connectorToken.length < 8) {
+    throw new Error('Connector auth token is required. Set CONNECTOR_AUTH_TOKEN, OPENCLAW_CONNECTOR_TOKEN, or PAIRING_CODE.');
+  }
+
+  wsUrl = buildWebSocketUrl(connectorToken, botKeys);
+}
+
 function connect(): void {
   const socket = new WebSocket(wsUrl);
 
@@ -199,4 +275,11 @@ function connect(): void {
   });
 }
 
-connect();
+ensureConnectorConfig()
+  .then(() => {
+    connect();
+  })
+  .catch((error) => {
+    console.error('[connector] startup failed', error);
+    process.exit(1);
+  });

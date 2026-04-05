@@ -25,20 +25,23 @@ export interface PobiOpenClawInfo {
   openclaw: {
     mode: 'mock' | 'http' | 'connector';
     botKey: string;
-    wsUrl: string;
     connected: boolean;
+    status: 'connected' | 'pairing_pending' | 'not_connected';
+    deviceName?: string;
+    lastSeenAt?: string;
+    pairingCode?: string;
+    pairingExpiresAt?: string;
     matchedConnectors: Array<{
       connectorId: string;
       wildcard: boolean;
       botKeys: string[];
       lastSeenAt: string;
     }>;
-    sampleEnv: {
-      HUB_WS_URL: string;
-      CONNECTOR_ID: string;
-      CONNECTOR_BOT_KEYS: string;
-      CONNECTOR_MODE: 'http' | 'mock';
-      OPENCLAW_LOCAL_BASE_URL: string;
-    };
   };
+}
+
+export interface PobiOpenClawPairingResult {
+  pairingCode: string;
+  expiresAt: string;
+  pobi: PobiSummary;
 }

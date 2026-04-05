@@ -1,11 +1,12 @@
-import { randomUUID } from 'crypto';
+import { createHash, randomBytes, randomUUID } from 'crypto';
 import type { FastifyBaseLogger } from 'fastify';
 import type { Pool, PoolClient } from 'pg';
 import { AppError, ErrorCodes } from '../../lib/errors';
 import type { AppEnv } from '../../config/env';
 import type { OpenClawConnectorHub } from '../openclaw/connector-hub';
 import type { SocialService } from '../social/social.service';
-import type { PobiOpenClawInfo, PobiRoomResult, PobiSummary } from './pobi.types';
+import type { PobiOpenClawInfo, PobiOpenClawPairingResult, PobiRoomResult, PobiSummary } from './pobi.types';
+import { customAlphabet } from 'nanoid';
 
 type PobiRow = {
   pobi_id: string;
@@ -23,6 +24,27 @@ type PobiRow = {
   bot_user_id: string;
 };
 
+type ConnectorRow = {
+  id: string;
+  owner_user_id: string;
+  connector_key: string;
+  device_name: string | null;
+  status: 'pending' | 'online' | 'offline' | 'revoked';
+  connected_at: Date | null;
+  last_seen_at: Date | null;
+};
+
+type PairingRow = {
+  id: string;
+  owner_user_id: string;
+  pobi_id: string;
+  pairing_code: string;
+  expires_at: Date;
+  consumed_at: Date | null;
+  connector_id: string | null;
+  created_at: Date;
+};
+
 type PobiServiceDeps = {
   db: Pool;
   socialService: SocialService;
@@ -32,6 +54,7 @@ type PobiServiceDeps = {
 };
 
 const POBI_THEMES = new Set(['seed', 'fairy', 'pet', 'buddy']);
+const connectorPairingCodeGenerator = customAlphabet('ABCDEFGHJKLMNPQRSTUVWXYZ23456789', 6);
 
 export class PobiService {
   private readonly db: Pool;
@@ -315,33 +338,284 @@ export class PobiService {
     });
   }
 
+  async createOpenClawPairing(
+    ownerUserId: string,
+    pobiId: string,
+    ttlSeconds = 600
+  ): Promise<PobiOpenClawPairingResult> {
+    const pobi = await this.getPobiByIdForOwner(ownerUserId, pobiId);
+    const effectiveTtlSeconds = Math.max(60, Math.min(3600, Math.floor(ttlSeconds)));
+    const expiresAt = new Date(Date.now() + effectiveTtlSeconds * 1000);
+
+    await this.db.query(
+      `DELETE FROM openclaw_connector_pairings
+       WHERE owner_user_id = $1
+         AND pobi_id = $2
+         AND consumed_at IS NULL`,
+      [ownerUserId, pobiId]
+    );
+
+    for (let attempt = 0; attempt < 5; attempt += 1) {
+      const pairingCode = connectorPairingCodeGenerator();
+
+      try {
+        await this.db.query(
+          `INSERT INTO openclaw_connector_pairings (owner_user_id, pobi_id, pairing_code, expires_at)
+           VALUES ($1, $2, $3, $4)`,
+          [ownerUserId, pobiId, pairingCode, expiresAt]
+        );
+
+        return {
+          pairingCode,
+          expiresAt: expiresAt.toISOString(),
+          pobi
+        };
+      } catch {
+        // retry collision
+      }
+    }
+
+    throw new AppError(500, ErrorCodes.INTERNAL_ERROR, 'Failed to generate OpenClaw pairing code.');
+  }
+
   async getOpenClawInfo(ownerUserId: string, pobiId: string): Promise<PobiOpenClawInfo> {
     const pobi = await this.getPobiByIdForOwner(ownerUserId, pobiId);
     const matchedConnectors = this.connectorHub.getConnectorsForBotKey(pobi.botKey);
-    const wsUrl = this.getOpenClawWsUrl();
+    const connector = await this.getConnectorForPobi(pobi.id);
+    const pairing = await this.getPendingPairingForPobi(ownerUserId, pobi.id);
+    const connected = matchedConnectors.length > 0;
+    const status: 'connected' | 'pairing_pending' | 'not_connected' = connected
+      ? 'connected'
+      : pairing
+        ? 'pairing_pending'
+        : 'not_connected';
 
     return {
       pobi,
       openclaw: {
         mode: this.env.OPENCLAW_MODE,
         botKey: pobi.botKey,
-        wsUrl,
-        connected: matchedConnectors.length > 0,
+        connected,
+        status,
+        ...(connector?.device_name ? { deviceName: connector.device_name } : {}),
+        ...(connector?.last_seen_at ? { lastSeenAt: connector.last_seen_at.toISOString() } : {}),
+        ...(pairing ? { pairingCode: pairing.pairing_code, pairingExpiresAt: pairing.expires_at.toISOString() } : {}),
         matchedConnectors: matchedConnectors.map((connector) => ({
           connectorId: connector.connectorId,
           wildcard: connector.wildcard,
           botKeys: connector.botKeys,
           lastSeenAt: connector.lastSeenAt
-        })),
-        sampleEnv: {
-          HUB_WS_URL: wsUrl,
-          CONNECTOR_ID: 'my-openclaw-device-1',
-          CONNECTOR_BOT_KEYS: pobi.botKey,
-          CONNECTOR_MODE: this.env.OPENCLAW_MODE === 'mock' ? 'mock' : 'http',
-          OPENCLAW_LOCAL_BASE_URL: 'http://127.0.0.1:18888'
-        }
+        }))
       }
     };
+  }
+
+  async registerOpenClawConnectorByPairing(input: {
+    pairingCode: string;
+    connectorKey: string;
+    deviceName?: string;
+    platform?: string;
+  }): Promise<{
+    connectorId: string;
+    ownerUserId: string;
+    pobiId: string;
+    botKey: string;
+    connectorAuthToken: string;
+    wsUrl: string;
+  }> {
+    const pairingCode = input.pairingCode.trim().toUpperCase();
+    const connectorKey = input.connectorKey.trim();
+    const deviceName = (input.deviceName || '').trim();
+    const platform = (input.platform || 'linux').trim() || 'linux';
+
+    if (!pairingCode || pairingCode.length < 6) {
+      throw new AppError(400, ErrorCodes.VALIDATION_ERROR, 'Pairing code is invalid.');
+    }
+    if (!connectorKey || connectorKey.length < 3 || connectorKey.length > 120) {
+      throw new AppError(400, ErrorCodes.VALIDATION_ERROR, 'connectorKey must be 3-120 characters.');
+    }
+
+    const client = await this.db.connect();
+
+    try {
+      await client.query('BEGIN');
+
+      const pairingResult = await client.query<PairingRow>(
+        `SELECT id,
+                owner_user_id,
+                pobi_id,
+                pairing_code,
+                expires_at,
+                consumed_at,
+                connector_id,
+                created_at
+         FROM openclaw_connector_pairings
+         WHERE pairing_code = $1
+         FOR UPDATE`,
+        [pairingCode]
+      );
+
+      const pairing = pairingResult.rows[0];
+      if (!pairing) {
+        throw new AppError(404, ErrorCodes.RESOURCE_NOT_FOUND, 'OpenClaw pairing code not found.');
+      }
+      if (pairing.consumed_at) {
+        throw new AppError(409, ErrorCodes.CONFLICT, 'OpenClaw pairing code already consumed.');
+      }
+      if (pairing.expires_at.getTime() <= Date.now()) {
+        throw new AppError(410, ErrorCodes.RESOURCE_NOT_FOUND, 'OpenClaw pairing code expired.');
+      }
+
+      const existingConnectorResult = await client.query<ConnectorRow & { auth_token_hash: string }>(
+        `SELECT id,
+                owner_user_id,
+                connector_key,
+                device_name,
+                status,
+                connected_at,
+                last_seen_at,
+                auth_token_hash
+         FROM openclaw_connectors
+         WHERE connector_key = $1
+         LIMIT 1
+         FOR UPDATE`,
+        [connectorKey]
+      );
+
+      const connectorAuthToken = randomBytes(32).toString('hex');
+      const connectorAuthTokenHash = this.hashConnectorToken(connectorAuthToken);
+
+      let connectorId = existingConnectorResult.rows[0]?.id ?? '';
+      const existingConnector = existingConnectorResult.rows[0];
+      if (existingConnector && existingConnector.owner_user_id !== pairing.owner_user_id) {
+        throw new AppError(409, ErrorCodes.CONFLICT, 'connectorKey is already registered to another owner.');
+      }
+
+      if (existingConnector) {
+        await client.query(
+          `UPDATE openclaw_connectors
+           SET owner_user_id = $2,
+               device_name = $3,
+               platform = $4,
+               status = 'offline',
+               auth_token_hash = $5,
+               updated_at = NOW()
+           WHERE id = $1`,
+          [existingConnector.id, pairing.owner_user_id, deviceName || existingConnector.device_name, platform, connectorAuthTokenHash]
+        );
+        connectorId = existingConnector.id;
+      } else {
+        const connectorInsert = await client.query<{ id: string }>(
+          `INSERT INTO openclaw_connectors (
+             owner_user_id,
+             connector_key,
+             device_name,
+             platform,
+             status,
+             auth_token_hash,
+             created_at,
+             updated_at
+           )
+           VALUES ($1, $2, $3, $4, 'offline', $5, NOW(), NOW())
+           RETURNING id`,
+          [pairing.owner_user_id, connectorKey, deviceName || null, platform, connectorAuthTokenHash]
+        );
+        connectorId = connectorInsert.rows[0]?.id ?? '';
+      }
+
+      await client.query(
+        `INSERT INTO openclaw_connector_pobis (connector_id, pobi_id)
+         VALUES ($1, $2)
+         ON CONFLICT (pobi_id)
+         DO UPDATE SET connector_id = EXCLUDED.connector_id`,
+        [connectorId, pairing.pobi_id]
+      );
+
+      await client.query(
+        `UPDATE openclaw_connector_pairings
+         SET consumed_at = NOW(),
+             connector_id = $2
+         WHERE id = $1`,
+        [pairing.id, connectorId]
+      );
+
+      await client.query('COMMIT');
+
+      const pobi = await this.getPobiByIdForOwner(pairing.owner_user_id, pairing.pobi_id);
+      return {
+        connectorId: connectorKey,
+        ownerUserId: pairing.owner_user_id,
+        pobiId: pairing.pobi_id,
+        botKey: pobi.botKey,
+        connectorAuthToken,
+        wsUrl: this.getOpenClawWsUrl()
+      };
+    } catch (error) {
+      await client.query('ROLLBACK');
+      throw error;
+    } finally {
+      client.release();
+    }
+  }
+
+  async resolveConnectorByAuthToken(token: string): Promise<{
+    connectorId: string;
+    botKeys: string[];
+    ownerUserId: string;
+  } | null> {
+    const trimmed = token.trim();
+    if (!trimmed) return null;
+
+    const tokenHash = this.hashConnectorToken(trimmed);
+    const result = await this.db.query<{
+      connector_id: string;
+      owner_user_id: string;
+      bot_key: string;
+    }>(
+      `SELECT c.connector_key AS connector_id,
+              c.owner_user_id,
+              b.bot_key
+       FROM openclaw_connectors c
+       INNER JOIN openclaw_connector_pobis cp ON cp.connector_id = c.id
+       INNER JOIN pobis p ON p.id = cp.pobi_id
+       INNER JOIN bots b ON b.id = p.bot_id
+       WHERE c.auth_token_hash = $1
+         AND c.status <> 'revoked'`,
+      [tokenHash]
+    );
+
+    if (result.rows.length === 0) {
+      return null;
+    }
+
+    return {
+      connectorId: result.rows[0].connector_id,
+      ownerUserId: result.rows[0].owner_user_id,
+      botKeys: Array.from(new Set(result.rows.map((row) => row.bot_key).filter(Boolean)))
+    };
+  }
+
+  async markConnectorConnected(connectorId: string): Promise<void> {
+    await this.db.query(
+      `UPDATE openclaw_connectors
+       SET status = 'online',
+           connected_at = NOW(),
+           last_seen_at = NOW(),
+           updated_at = NOW()
+       WHERE connector_key = $1`,
+      [connectorId]
+    );
+  }
+
+  async markConnectorDisconnected(connectorId: string): Promise<void> {
+    await this.db.query(
+      `UPDATE openclaw_connectors
+       SET status = 'offline',
+           last_seen_at = NOW(),
+           updated_at = NOW()
+       WHERE connector_key = $1`,
+      [connectorId]
+    );
   }
 
   private async getPobiByIdForOwner(ownerUserId: string, pobiId: string): Promise<PobiSummary> {
@@ -382,6 +656,52 @@ export class PobiService {
     }
 
     return row;
+  }
+
+  private async getPendingPairingForPobi(ownerUserId: string, pobiId: string): Promise<PairingRow | null> {
+    const result = await this.db.query<PairingRow>(
+      `SELECT id,
+              owner_user_id,
+              pobi_id,
+              pairing_code,
+              expires_at,
+              consumed_at,
+              connector_id,
+              created_at
+       FROM openclaw_connector_pairings
+       WHERE owner_user_id = $1
+         AND pobi_id = $2
+         AND consumed_at IS NULL
+         AND expires_at > NOW()
+       ORDER BY created_at DESC
+       LIMIT 1`,
+      [ownerUserId, pobiId]
+    );
+
+    return result.rows[0] ?? null;
+  }
+
+  private async getConnectorForPobi(pobiId: string): Promise<ConnectorRow | null> {
+    const result = await this.db.query<ConnectorRow>(
+      `SELECT c.id,
+              c.owner_user_id,
+              c.connector_key,
+              c.device_name,
+              c.status,
+              c.connected_at,
+              c.last_seen_at
+       FROM openclaw_connector_pobis cp
+       INNER JOIN openclaw_connectors c ON c.id = cp.connector_id
+       WHERE cp.pobi_id = $1
+       LIMIT 1`,
+      [pobiId]
+    );
+
+    return result.rows[0] ?? null;
+  }
+
+  private hashConnectorToken(token: string): string {
+    return createHash('sha256').update(token).digest('hex');
   }
 
   private normalizeTheme(theme?: string): string {

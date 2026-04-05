@@ -122,4 +122,34 @@ export async function pobiRoutes(app: FastifyInstance): Promise<void> {
       return { success: true, data };
     }
   );
+
+  app.post(
+    '/:pobiId/openclaw/pairings',
+    {
+      preHandler: app.authenticate,
+      schema: {
+        tags: ['pobis'],
+        summary: 'Create one-time OpenClaw pairing code for a Pobi',
+        params: {
+          type: 'object',
+          required: ['pobiId'],
+          properties: {
+            pobiId: { type: 'string', format: 'uuid' }
+          }
+        },
+        body: {
+          type: 'object',
+          properties: {
+            ttlSeconds: { type: 'number', minimum: 60, maximum: 3600 }
+          }
+        }
+      }
+    },
+    async (request) => {
+      const params = request.params as { pobiId: string };
+      const body = (request.body as { ttlSeconds?: number } | undefined) ?? {};
+      const data = await app.pobiService.createOpenClawPairing(request.user.sub, params.pobiId, body.ttlSeconds);
+      return { success: true, data };
+    }
+  );
 }

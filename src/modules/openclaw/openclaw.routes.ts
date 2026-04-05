@@ -38,17 +38,71 @@ function parseConnectorQuery(request: FastifyRequest): ConnectorQuery {
 }
 
 export async function openClawRoutes(app: FastifyInstance): Promise<void> {
-  app.get('/connector/ws', { websocket: true }, (socket, request) => {
+  app.post(
+    '/connectors/register',
+    {
+      schema: {
+        tags: ['openclaw'],
+        summary: 'Register an OpenClaw connector using a one-time pairing code',
+        body: {
+          type: 'object',
+          required: ['pairingCode', 'connectorKey'],
+          properties: {
+            pairingCode: { type: 'string', minLength: 6, maxLength: 12 },
+            connectorKey: { type: 'string', minLength: 3, maxLength: 120 },
+            deviceName: { type: 'string', maxLength: 120 },
+            platform: { type: 'string', maxLength: 40 }
+          }
+        }
+      }
+    },
+    async (request) => {
+      const body = request.body as {
+        pairingCode: string;
+        connectorKey: string;
+        deviceName?: string;
+        platform?: string;
+      };
+      const data = await app.pobiService.registerOpenClawConnectorByPairing(body);
+      return {
+        success: true,
+        data
+      };
+    }
+  );
+
+  app.get('/connector/ws', { websocket: true }, async (socket, request) => {
     const query = parseConnectorQuery(request);
-    if (!query.token || query.token !== env.OPENCLAW_CONNECTOR_TOKEN) {
+    let connectorId = query.connectorId;
+    let botKeys = query.botKeys;
+
+    if (!query.token) {
       socket.close(1008, 'Unauthorized connector');
       return;
     }
 
+    if (query.token !== env.OPENCLAW_CONNECTOR_TOKEN) {
+      const resolved = await app.pobiService.resolveConnectorByAuthToken(query.token);
+      if (!resolved) {
+        socket.close(1008, 'Unauthorized connector');
+        return;
+      }
+
+      connectorId = resolved.connectorId;
+      if (botKeys.length === 0) {
+        botKeys = resolved.botKeys;
+      }
+    }
+
     const registration = app.openClawConnectorHub.registerConnector({
       socket,
-      connectorId: query.connectorId,
-      botKeys: query.botKeys
+      connectorId,
+      botKeys
+    });
+
+    void app.pobiService.markConnectorConnected(registration.connectorId).catch(() => null);
+    socket.on('close', () => {
+      void app.pobiService.markConnectorDisconnected(registration.connectorId).catch(() => null);
     });
 
     app.log.info(
