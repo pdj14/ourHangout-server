@@ -2,8 +2,10 @@ import { randomUUID } from 'crypto';
 import type { FastifyBaseLogger } from 'fastify';
 import type { Pool, PoolClient } from 'pg';
 import { AppError, ErrorCodes } from '../../lib/errors';
+import type { AppEnv } from '../../config/env';
+import type { OpenClawConnectorHub } from '../openclaw/connector-hub';
 import type { SocialService } from '../social/social.service';
-import type { PobiRoomResult, PobiSummary } from './pobi.types';
+import type { PobiOpenClawInfo, PobiRoomResult, PobiSummary } from './pobi.types';
 
 type PobiRow = {
   pobi_id: string;
@@ -24,6 +26,8 @@ type PobiRow = {
 type PobiServiceDeps = {
   db: Pool;
   socialService: SocialService;
+  connectorHub: OpenClawConnectorHub;
+  env: AppEnv;
   logger: FastifyBaseLogger;
 };
 
@@ -32,11 +36,15 @@ const POBI_THEMES = new Set(['seed', 'fairy', 'pet', 'buddy']);
 export class PobiService {
   private readonly db: Pool;
   private readonly socialService: SocialService;
+  private readonly connectorHub: OpenClawConnectorHub;
+  private readonly env: AppEnv;
   private readonly logger: FastifyBaseLogger;
 
   constructor(deps: PobiServiceDeps) {
     this.db = deps.db;
     this.socialService = deps.socialService;
+    this.connectorHub = deps.connectorHub;
+    this.env = deps.env;
     this.logger = deps.logger;
   }
 
@@ -307,6 +315,35 @@ export class PobiService {
     });
   }
 
+  async getOpenClawInfo(ownerUserId: string, pobiId: string): Promise<PobiOpenClawInfo> {
+    const pobi = await this.getPobiByIdForOwner(ownerUserId, pobiId);
+    const matchedConnectors = this.connectorHub.getConnectorsForBotKey(pobi.botKey);
+    const wsUrl = this.getOpenClawWsUrl();
+
+    return {
+      pobi,
+      openclaw: {
+        mode: this.env.OPENCLAW_MODE,
+        botKey: pobi.botKey,
+        wsUrl,
+        connected: matchedConnectors.length > 0,
+        matchedConnectors: matchedConnectors.map((connector) => ({
+          connectorId: connector.connectorId,
+          wildcard: connector.wildcard,
+          botKeys: connector.botKeys,
+          lastSeenAt: connector.lastSeenAt
+        })),
+        sampleEnv: {
+          HUB_WS_URL: wsUrl,
+          CONNECTOR_ID: 'my-openclaw-device-1',
+          CONNECTOR_BOT_KEYS: pobi.botKey,
+          CONNECTOR_MODE: this.env.OPENCLAW_MODE === 'mock' ? 'mock' : 'http',
+          OPENCLAW_LOCAL_BASE_URL: 'http://127.0.0.1:18888'
+        }
+      }
+    };
+  }
+
   private async getPobiByIdForOwner(ownerUserId: string, pobiId: string): Promise<PobiSummary> {
     const row = await this.getPobiRowByIdForOwner(ownerUserId, pobiId);
     return this.mapPobi(row);
@@ -358,6 +395,17 @@ export class PobiService {
     }
 
     return normalized;
+  }
+
+  private getOpenClawWsUrl(): string {
+    const baseUrl = this.env.PUBLIC_BASE_URL.replace(/\/+$/, '');
+    if (/^https:/i.test(baseUrl)) {
+      return `${baseUrl.replace(/^https:/i, 'wss:')}/v1/openclaw/connector/ws`;
+    }
+    if (/^http:/i.test(baseUrl)) {
+      return `${baseUrl.replace(/^http:/i, 'ws:')}/v1/openclaw/connector/ws`;
+    }
+    return `${baseUrl}/v1/openclaw/connector/ws`;
   }
 
   private mapPobi(row: PobiRow): PobiSummary {

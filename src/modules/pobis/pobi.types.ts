@@ -19,3 +19,26 @@ export interface PobiRoomResult {
   pobi: PobiSummary;
   room: RoomDto;
 }
+
+export interface PobiOpenClawInfo {
+  pobi: PobiSummary;
+  openclaw: {
+    mode: 'mock' | 'http' | 'connector';
+    botKey: string;
+    wsUrl: string;
+    connected: boolean;
+    matchedConnectors: Array<{
+      connectorId: string;
+      wildcard: boolean;
+      botKeys: string[];
+      lastSeenAt: string;
+    }>;
+    sampleEnv: {
+      HUB_WS_URL: string;
+      CONNECTOR_ID: string;
+      CONNECTOR_BOT_KEYS: string;
+      CONNECTOR_MODE: 'http' | 'mock';
+      OPENCLAW_LOCAL_BASE_URL: string;
+    };
+  };
+}

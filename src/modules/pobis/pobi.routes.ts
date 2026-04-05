@@ -99,4 +99,27 @@ export async function pobiRoutes(app: FastifyInstance): Promise<void> {
       return { success: true, data };
     }
   );
+
+  app.get(
+    '/:pobiId/openclaw',
+    {
+      preHandler: app.authenticate,
+      schema: {
+        tags: ['pobis'],
+        summary: 'Get Pobi-specific OpenClaw connection info',
+        params: {
+          type: 'object',
+          required: ['pobiId'],
+          properties: {
+            pobiId: { type: 'string', format: 'uuid' }
+          }
+        }
+      }
+    },
+    async (request) => {
+      const params = request.params as { pobiId: string };
+      const data = await app.pobiService.getOpenClawInfo(request.user.sub, params.pobiId);
+      return { success: true, data };
+    }
+  );
 }

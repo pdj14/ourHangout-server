@@ -115,6 +115,8 @@ export async function buildServer(): Promise<FastifyInstance> {
   const pobiService = new PobiService({
     db,
     socialService,
+    connectorHub: openClawConnectorHub,
+    env,
     logger: app.log
   });
 

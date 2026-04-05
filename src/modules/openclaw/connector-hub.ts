@@ -241,6 +241,32 @@ export class OpenClawConnectorHub {
     };
   }
 
+  getConnectorsForBotKey(botKey?: string): Array<{
+    connectorId: string;
+    botKeys: string[];
+    wildcard: boolean;
+    connectedAt: string;
+    lastSeenAt: string;
+  }> {
+    const active = this.getActiveSessions();
+    const normalizedBotKey = botKey ? normalizeBotKey(botKey) : '';
+
+    return active
+      .filter((session) => {
+        if (!normalizedBotKey) {
+          return true;
+        }
+        return session.wildcard || session.botKeys.has(normalizedBotKey);
+      })
+      .map((session) => ({
+        connectorId: session.connectorId,
+        botKeys: Array.from(session.botKeys),
+        wildcard: session.wildcard,
+        connectedAt: session.connectedAt.toISOString(),
+        lastSeenAt: session.lastSeenAt.toISOString()
+      }));
+  }
+
   closeAll(): void {
     for (const session of this.sessions.values()) {
       try {
