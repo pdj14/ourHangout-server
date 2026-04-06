@@ -2148,6 +2148,93 @@ export class SocialService {
     };
   }
 
+  async removeBotUserFromAllRooms(botUserId: string): Promise<{
+    closedDirectRoomIds: string[];
+    updatedRoomIds: string[];
+  }> {
+    const result = await this.db.query<{
+      room_id: string;
+      room_type: RoomType;
+    }>(
+      `SELECT r.id AS room_id,
+              r.type AS room_type
+       FROM room_members rm
+       INNER JOIN rooms r ON r.id = rm.room_id
+       WHERE rm.user_id = $1
+         AND rm.left_at IS NULL
+         AND r.deleted_at IS NULL`,
+      [botUserId]
+    );
+
+    if (result.rows.length === 0) {
+      return {
+        closedDirectRoomIds: [],
+        updatedRoomIds: []
+      };
+    }
+
+    const client = await this.db.connect();
+    const directNotifications = new Map<string, string[]>();
+    const roomNotifications = new Map<string, string[]>();
+
+    try {
+      await client.query('BEGIN');
+
+      for (const row of result.rows) {
+        const roomId = row.room_id;
+        const memberIds = await this.getAllRoomMemberIds(roomId, client);
+        roomNotifications.set(roomId, memberIds);
+
+        if (row.room_type === 'direct') {
+          await this.closeDirectRoom(client, roomId);
+          directNotifications.set(roomId, memberIds);
+          continue;
+        }
+
+        await this.removeRoomMembership(roomId, botUserId, client);
+        await client.query(
+          `UPDATE rooms
+           SET updated_at = NOW()
+           WHERE id = $1`,
+          [roomId]
+        );
+      }
+
+      await client.query('COMMIT');
+    } catch (error) {
+      await client.query('ROLLBACK');
+      throw error;
+    } finally {
+      client.release();
+    }
+
+    for (const [roomId, memberIds] of directNotifications.entries()) {
+      this.emitToUsers(memberIds, {
+        event: 'room.updated',
+        data: {
+          roomId,
+          deleted: true
+        }
+      });
+    }
+
+    for (const [roomId, memberIds] of roomNotifications.entries()) {
+      if (directNotifications.has(roomId)) {
+        continue;
+      }
+
+      this.emitToUsers(memberIds, {
+        event: 'room.updated',
+        data: { roomId }
+      });
+    }
+
+    return {
+      closedDirectRoomIds: Array.from(directNotifications.keys()),
+      updatedRoomIds: Array.from(roomNotifications.keys()).filter((roomId) => !directNotifications.has(roomId))
+    };
+  }
+
   async listRoomInvitations(userId: string): Promise<RoomInvitationListDto> {
     const result = await this.db.query<RoomInvitationRow>(
       `SELECT fri.id,

@@ -31,6 +31,7 @@ export interface PobiOpenClawInfo {
     lastSeenAt?: string;
     pairingCode?: string;
     pairingExpiresAt?: string;
+    pairingPersistent?: boolean;
     matchedConnectors: Array<{
       connectorId: string;
       wildcard: boolean;
@@ -49,5 +50,6 @@ export interface PobiOpenClawInfo {
 export interface PobiOpenClawPairingResult {
   pairingCode: string;
   expiresAt: string;
+  persistent?: boolean;
   pobi: PobiSummary;
 }

@@ -88,6 +88,7 @@ type PobiServiceDeps = {
 
 const POBI_THEMES = new Set(['seed', 'fairy', 'pet', 'buddy']);
 const connectorPairingCodeGenerator = customAlphabet('ABCDEFGHJKLMNPQRSTUVWXYZ23456789', 6);
+const PERSISTENT_OPENCLAW_PAIRING_EXPIRES_AT = new Date('2099-12-31T23:59:59.000Z');
 
 export class PobiService {
   private readonly db: Pool;
@@ -314,6 +315,86 @@ export class PobiService {
     return this.getPobiByIdForOwner(ownerUserId, pobiId);
   }
 
+  async deletePobi(ownerUserId: string, pobiId: string): Promise<{ deleted: true; pobiId: string }> {
+    const current = await this.getPobiRowByIdForOwner(ownerUserId, pobiId);
+    const connectorKeysToClose = new Set<string>();
+
+    const client = await this.db.connect();
+
+    try {
+      await client.query('BEGIN');
+
+      const linkedConnectors = await client.query<{ connector_key: string }>(
+        `SELECT c.connector_key
+         FROM openclaw_connector_pobis cp
+         INNER JOIN openclaw_connectors c ON c.id = cp.connector_id
+         WHERE cp.pobi_id = $1`,
+        [current.pobi_id]
+      );
+      for (const row of linkedConnectors.rows) {
+        if (row.connector_key) {
+          connectorKeysToClose.add(row.connector_key);
+        }
+      }
+
+      await client.query(`DELETE FROM openclaw_connector_pobis WHERE pobi_id = $1`, [current.pobi_id]);
+      await client.query(`DELETE FROM openclaw_connector_pairings WHERE pobi_id = $1`, [current.pobi_id]);
+
+      await client.query(
+        `UPDATE bots
+         SET is_active = FALSE
+         WHERE id = $1`,
+        [current.bot_id]
+      );
+
+      await client.query(
+        `UPDATE pobis
+         SET is_active = FALSE,
+             is_default = FALSE,
+             updated_at = NOW()
+         WHERE id = $1`,
+        [current.pobi_id]
+      );
+
+      if (current.pobi_is_default) {
+        const nextDefault = await client.query<{ pobi_id: string }>(
+          `SELECT id AS pobi_id
+           FROM pobis
+           WHERE owner_user_id = $1
+             AND id <> $2
+             AND is_active = TRUE
+           ORDER BY created_at ASC
+           LIMIT 1`,
+          [ownerUserId, current.pobi_id]
+        );
+
+        const nextDefaultId = nextDefault.rows[0]?.pobi_id;
+        if (nextDefaultId) {
+          await client.query(
+            `UPDATE pobis
+             SET is_default = TRUE,
+                 updated_at = NOW()
+             WHERE id = $1`,
+            [nextDefaultId]
+          );
+        }
+      }
+
+      await client.query('COMMIT');
+    } catch (error) {
+      await client.query('ROLLBACK');
+      throw error;
+    } finally {
+      client.release();
+    }
+
+    await this.socialService.removeBotUserFromAllRooms(current.bot_user_id);
+    this.closeOpenClawSessions(connectorKeysToClose, 'Pobi deleted');
+
+    this.logger.info({ ownerUserId, pobiId }, 'Pobi deleted');
+    return { deleted: true, pobiId: current.pobi_id };
+  }
+
   async createOrGetDirectRoom(ownerUserId: string, pobiId: string): Promise<PobiRoomResult> {
     const pobi = await this.getPobiByIdForOwner(ownerUserId, pobiId);
     const room = await this.socialService.createOrGetDirectRoom(ownerUserId, pobi.botUserId);
@@ -378,25 +459,22 @@ export class PobiService {
     pobiId: string,
     ttlSeconds = 600
   ): Promise<PobiOpenClawPairingResult> {
+    void ttlSeconds;
     const pobi = await this.getPobiByIdForOwner(ownerUserId, pobiId);
-    const existingPairing = await this.getPendingPairingForPobi(ownerUserId, pobiId);
-    if (existingPairing) {
+    const existingPairing = await this.getReusablePairingForPobi(ownerUserId, pobiId);
+    if (existingPairing && this.isPersistentPairing(existingPairing)) {
       return {
         pairingCode: existingPairing.pairing_code,
         expiresAt: existingPairing.expires_at.toISOString(),
+        persistent: true,
         pobi
       };
     }
 
-    const effectiveTtlSeconds = Math.max(60, Math.min(3600, Math.floor(ttlSeconds)));
-    const expiresAt = new Date(Date.now() + effectiveTtlSeconds * 1000);
-
     await this.db.query(
       `DELETE FROM openclaw_connector_pairings
        WHERE owner_user_id = $1
-         AND pobi_id = $2
-         AND consumed_at IS NULL
-         AND expires_at <= NOW()`,
+         AND pobi_id = $2`,
       [ownerUserId, pobiId]
     );
 
@@ -407,12 +485,13 @@ export class PobiService {
         await this.db.query(
           `INSERT INTO openclaw_connector_pairings (owner_user_id, pobi_id, pairing_code, expires_at)
            VALUES ($1, $2, $3, $4)`,
-          [ownerUserId, pobiId, pairingCode, expiresAt]
+          [ownerUserId, pobiId, pairingCode, PERSISTENT_OPENCLAW_PAIRING_EXPIRES_AT]
         );
 
         return {
           pairingCode,
-          expiresAt: expiresAt.toISOString(),
+          expiresAt: PERSISTENT_OPENCLAW_PAIRING_EXPIRES_AT.toISOString(),
+          persistent: true,
           pobi
         };
       } catch {
@@ -428,7 +507,8 @@ export class PobiService {
     const matchedConnectors = this.connectorHub.getConnectorsForBotKey(pobi.botKey);
     const matchedChannels = this.channelHub.getSessionsForPobi(pobi.id);
     const connector = await this.getConnectorForPobi(pobi.id);
-    const pairing = await this.getPendingPairingForPobi(ownerUserId, pobi.id);
+    const pairing = await this.getReusablePairingForPobi(ownerUserId, pobi.id);
+    const pairingPersistent = pairing ? this.isPersistentPairing(pairing) : false;
     const connected = matchedConnectors.length > 0 || matchedChannels.length > 0;
     const status: 'connected' | 'pairing_pending' | 'not_connected' = connected
       ? 'connected'
@@ -445,7 +525,9 @@ export class PobiService {
         status,
         ...(connector?.device_name ? { deviceName: connector.device_name } : {}),
         ...(connector?.last_seen_at ? { lastSeenAt: connector.last_seen_at.toISOString() } : {}),
-        ...(pairing ? { pairingCode: pairing.pairing_code, pairingExpiresAt: pairing.expires_at.toISOString() } : {}),
+        ...(pairing ? { pairingCode: pairing.pairing_code } : {}),
+        ...(pairingPersistent ? { pairingPersistent: true } : {}),
+        ...(pairing && !pairingPersistent ? { pairingExpiresAt: pairing.expires_at.toISOString() } : {}),
         matchedConnectors: matchedConnectors.map((connector) => ({
           connectorId: connector.connectorId,
           wildcard: connector.wildcard,
@@ -498,6 +580,65 @@ export class PobiService {
       messagesUrl: `${httpBaseUrl}/v1/openclaw/channel/messages`,
       sessionKeyPrefix: 'ourhangout:direct'
     };
+  }
+
+  async disconnectOpenClaw(ownerUserId: string, pobiId: string): Promise<{ disconnected: true; pobiId: string }> {
+    const pobi = await this.getPobiByIdForOwner(ownerUserId, pobiId);
+    const connectorKeysToClose = new Set<string>();
+
+    const client = await this.db.connect();
+
+    try {
+      await client.query('BEGIN');
+
+      const linkedConnectors = await client.query<{ connector_key: string }>(
+        `SELECT c.connector_key
+         FROM openclaw_connector_pobis cp
+         INNER JOIN openclaw_connectors c ON c.id = cp.connector_id
+         WHERE cp.pobi_id = $1`,
+        [pobi.id]
+      );
+      for (const row of linkedConnectors.rows) {
+        if (row.connector_key) {
+          connectorKeysToClose.add(row.connector_key);
+        }
+      }
+
+      await client.query(`DELETE FROM openclaw_connector_pobis WHERE pobi_id = $1`, [pobi.id]);
+      await client.query(
+        `UPDATE openclaw_connector_pairings
+         SET connector_id = NULL
+         WHERE pobi_id = $1`,
+        [pobi.id]
+      );
+
+      await client.query(
+        `UPDATE openclaw_connectors c
+         SET status = 'offline',
+             updated_at = NOW()
+         WHERE c.id IN (
+           SELECT c2.id
+           FROM openclaw_connectors c2
+           LEFT JOIN openclaw_connector_pobis cp2 ON cp2.connector_id = c2.id
+           WHERE c2.connector_key = ANY($1::text[])
+           GROUP BY c2.id
+           HAVING COUNT(cp2.pobi_id) = 0
+         )`,
+        [Array.from(connectorKeysToClose)]
+      );
+
+      await client.query('COMMIT');
+    } catch (error) {
+      await client.query('ROLLBACK');
+      throw error;
+    } finally {
+      client.release();
+    }
+
+    this.closeOpenClawSessions(connectorKeysToClose, 'Pobi disconnected');
+
+    this.logger.info({ ownerUserId, pobiId }, 'Pobi OpenClaw connection disconnected');
+    return { disconnected: true, pobiId: pobi.id };
   }
 
   async resolveOpenClawChannelByAuthToken(token: string): Promise<{
@@ -791,12 +932,19 @@ export class PobiService {
       if (!pairing) {
         throw new AppError(404, ErrorCodes.RESOURCE_NOT_FOUND, 'OpenClaw pairing code not found.');
       }
-      if (pairing.consumed_at) {
-        throw new AppError(409, ErrorCodes.CONFLICT, 'OpenClaw pairing code already consumed.');
-      }
       if (pairing.expires_at.getTime() <= Date.now()) {
         throw new AppError(410, ErrorCodes.RESOURCE_NOT_FOUND, 'OpenClaw pairing code expired.');
       }
+
+      const previousConnectorResult = await client.query<{ connector_key: string }>(
+        `SELECT c.connector_key
+         FROM openclaw_connector_pobis cp
+         INNER JOIN openclaw_connectors c ON c.id = cp.connector_id
+         WHERE cp.pobi_id = $1
+         LIMIT 1`,
+        [pairing.pobi_id]
+      );
+      const previousConnectorKey = previousConnectorResult.rows[0]?.connector_key ?? '';
 
       const existingConnectorResult = await client.query<ConnectorRow & { auth_token_hash: string }>(
         `SELECT id,
@@ -865,13 +1013,18 @@ export class PobiService {
 
       await client.query(
         `UPDATE openclaw_connector_pairings
-         SET consumed_at = NOW(),
-             connector_id = $2
+         SET connector_id = $2
          WHERE id = $1`,
         [pairing.id, connectorId]
       );
 
       await client.query('COMMIT');
+
+      const connectorKeysToClose = new Set<string>([connectorKey]);
+      if (previousConnectorKey) {
+        connectorKeysToClose.add(previousConnectorKey);
+      }
+      this.closeOpenClawSessions(connectorKeysToClose, 'Connector re-registered');
 
       const pobi = await this.getPobiByIdForOwner(pairing.owner_user_id, pairing.pobi_id);
       return {
@@ -1013,6 +1166,28 @@ export class PobiService {
     return result.rows[0] ?? null;
   }
 
+  private async getReusablePairingForPobi(ownerUserId: string, pobiId: string): Promise<PairingRow | null> {
+    const result = await this.db.query<PairingRow>(
+      `SELECT id,
+              owner_user_id,
+              pobi_id,
+              pairing_code,
+              expires_at,
+              consumed_at,
+              connector_id,
+              created_at
+       FROM openclaw_connector_pairings
+       WHERE owner_user_id = $1
+         AND pobi_id = $2
+         AND expires_at > NOW()
+       ORDER BY created_at DESC
+       LIMIT 1`,
+      [ownerUserId, pobiId]
+    );
+
+    return result.rows[0] ?? null;
+  }
+
   private async getConnectorForPobi(pobiId: string): Promise<ConnectorRow | null> {
     const result = await this.db.query<ConnectorRow>(
       `SELECT c.id,
@@ -1034,6 +1209,22 @@ export class PobiService {
 
   private hashConnectorToken(token: string): string {
     return createHash('sha256').update(token).digest('hex');
+  }
+
+  private isPersistentPairing(pairing: Pick<PairingRow, 'expires_at'>): boolean {
+    return pairing.expires_at.getUTCFullYear() >= 2099;
+  }
+
+  private closeOpenClawSessions(connectorKeys: Iterable<string>, reason: string): void {
+    for (const connectorKey of connectorKeys) {
+      const normalized = connectorKey.trim();
+      if (!normalized) {
+        continue;
+      }
+
+      this.connectorHub.closeConnector(normalized, reason);
+      this.channelHub.closeSession(normalized, reason);
+    }
   }
 
   private makeDirectSessionKey(roomId: string, pobiId: string): string {

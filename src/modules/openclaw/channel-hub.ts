@@ -170,6 +170,21 @@ export class OpenClawChannelHub {
     return sessions.length;
   }
 
+  closeSession(accountId: string, reason = 'Server requested disconnect'): boolean {
+    const session = this.sessions.get(accountId);
+    if (!session) {
+      return false;
+    }
+
+    try {
+      session.socket.close(1012, reason);
+    } catch {
+      this.unregisterSession(accountId, session.socket, 'close-request-failed');
+    }
+
+    return true;
+  }
+
   closeAll(): void {
     for (const session of this.sessions.values()) {
       try {

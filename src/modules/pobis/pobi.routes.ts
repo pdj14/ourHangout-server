@@ -77,6 +77,29 @@ export async function pobiRoutes(app: FastifyInstance): Promise<void> {
     }
   );
 
+  app.delete(
+    '/:pobiId',
+    {
+      preHandler: app.authenticate,
+      schema: {
+        tags: ['pobis'],
+        summary: 'Delete a Pobi and remove its room/OpenClaw bindings',
+        params: {
+          type: 'object',
+          required: ['pobiId'],
+          properties: {
+            pobiId: { type: 'string', format: 'uuid' }
+          }
+        }
+      }
+    },
+    async (request) => {
+      const params = request.params as { pobiId: string };
+      const data = await app.pobiService.deletePobi(request.user.sub, params.pobiId);
+      return { success: true, data };
+    }
+  );
+
   app.post(
     '/:pobiId/direct-room',
     {
@@ -129,7 +152,7 @@ export async function pobiRoutes(app: FastifyInstance): Promise<void> {
       preHandler: app.authenticate,
       schema: {
         tags: ['pobis'],
-        summary: 'Create one-time OpenClaw pairing code for a Pobi',
+        summary: 'Create or get a reusable OpenClaw pairing code for a Pobi',
         params: {
           type: 'object',
           required: ['pobiId'],
@@ -149,6 +172,29 @@ export async function pobiRoutes(app: FastifyInstance): Promise<void> {
       const params = request.params as { pobiId: string };
       const body = (request.body as { ttlSeconds?: number } | undefined) ?? {};
       const data = await app.pobiService.createOpenClawPairing(request.user.sub, params.pobiId, body.ttlSeconds);
+      return { success: true, data };
+    }
+  );
+
+  app.delete(
+    '/:pobiId/openclaw',
+    {
+      preHandler: app.authenticate,
+      schema: {
+        tags: ['pobis'],
+        summary: 'Disconnect the current OpenClaw device from a Pobi while keeping its reusable pairing code',
+        params: {
+          type: 'object',
+          required: ['pobiId'],
+          properties: {
+            pobiId: { type: 'string', format: 'uuid' }
+          }
+        }
+      }
+    },
+    async (request) => {
+      const params = request.params as { pobiId: string };
+      const data = await app.pobiService.disconnectOpenClaw(request.user.sub, params.pobiId);
       return { success: true, data };
     }
   );

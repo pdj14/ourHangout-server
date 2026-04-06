@@ -267,6 +267,21 @@ export class OpenClawConnectorHub {
       }));
   }
 
+  closeConnector(connectorId: string, reason = 'Server requested disconnect'): boolean {
+    const session = this.sessions.get(connectorId);
+    if (!session) {
+      return false;
+    }
+
+    try {
+      session.socket.close(1012, reason);
+    } catch {
+      this.unregisterConnector(connectorId, session.socket, 'close-request-failed');
+    }
+
+    return true;
+  }
+
   closeAll(): void {
     for (const session of this.sessions.values()) {
       try {
