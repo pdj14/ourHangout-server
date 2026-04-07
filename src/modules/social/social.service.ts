@@ -2166,8 +2166,9 @@ export class SocialService {
       [botUserId]
     );
 
-    const messageRoomResult = await this.db.query<{ room_id: string }>(
-      `SELECT DISTINCT r.id AS room_id
+    const messageRoomResult = await this.db.query<{ room_id: string; room_type: RoomType }>(
+      `SELECT DISTINCT r.id AS room_id,
+                       r.type AS room_type
        FROM room_messages m
        INNER JOIN rooms r ON r.id = m.room_id
        WHERE m.sender_id = $1
@@ -2216,6 +2217,13 @@ export class SocialService {
       for (const row of messageRoomResult.rows) {
         const roomId = row.room_id;
         if (!roomId || roomNotifications.has(roomId) || directNotifications.has(roomId)) {
+          continue;
+        }
+
+        if (row.room_type === 'direct') {
+          const memberIds = await this.getAllRoomMemberIds(roomId, client);
+          await this.closeDirectRoom(client, roomId);
+          directNotifications.set(roomId, memberIds);
           continue;
         }
 
