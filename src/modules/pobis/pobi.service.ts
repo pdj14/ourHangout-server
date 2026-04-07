@@ -388,7 +388,12 @@ export class PobiService {
       client.release();
     }
 
-    await this.socialService.removeBotUserFromAllRooms(current.bot_user_id);
+    try {
+      await this.socialService.removeBotUserFromAllRooms(current.bot_user_id);
+    } catch (error) {
+      this.logger.error({ error, ownerUserId, pobiId, botUserId: current.bot_user_id }, 'Pobi post-delete room cleanup failed');
+    }
+
     this.closeOpenClawSessions(connectorKeysToClose, 'Pobi deleted');
 
     this.logger.info({ ownerUserId, pobiId }, 'Pobi deleted');
@@ -1222,8 +1227,17 @@ export class PobiService {
         continue;
       }
 
-      this.connectorHub.closeConnector(normalized, reason);
-      this.channelHub.closeSession(normalized, reason);
+      try {
+        this.connectorHub.closeConnector(normalized, reason);
+      } catch (error) {
+        this.logger.warn({ error, connectorKey: normalized }, 'Failed to close OpenClaw connector session');
+      }
+
+      try {
+        this.channelHub.closeSession(normalized, reason);
+      } catch (error) {
+        this.logger.warn({ error, accountId: normalized }, 'Failed to close OpenClaw channel session');
+      }
     }
   }
 

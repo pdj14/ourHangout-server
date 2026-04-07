@@ -36,14 +36,25 @@ export class ConnectionManager {
 
     const serialized = JSON.stringify(payload);
     let atLeastOneSent = false;
+    const staleSockets: WebSocket[] = [];
 
     for (const socket of sockets) {
       if (socket.readyState !== WebSocket.OPEN) {
+        staleSockets.push(socket);
         continue;
       }
 
-      socket.send(serialized);
-      atLeastOneSent = true;
+      try {
+        socket.send(serialized);
+        atLeastOneSent = true;
+      } catch (error) {
+        staleSockets.push(socket);
+        this.logger.warn({ error, userId }, 'WebSocket send failed');
+      }
+    }
+
+    for (const socket of staleSockets) {
+      this.unregister(userId, socket);
     }
 
     return atLeastOneSent;
