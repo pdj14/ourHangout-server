@@ -2152,7 +2152,7 @@ export class SocialService {
     closedDirectRoomIds: string[];
     updatedRoomIds: string[];
   }> {
-    const result = await this.db.query<{
+    const membershipResult = await this.db.query<{
       room_id: string;
       room_type: RoomType;
     }>(
@@ -2166,7 +2166,16 @@ export class SocialService {
       [botUserId]
     );
 
-    if (result.rows.length === 0) {
+    const messageRoomResult = await this.db.query<{ room_id: string }>(
+      `SELECT DISTINCT r.id AS room_id
+       FROM room_messages m
+       INNER JOIN rooms r ON r.id = m.room_id
+       WHERE m.sender_id = $1
+         AND r.deleted_at IS NULL`,
+      [botUserId]
+    );
+
+    if (membershipResult.rows.length === 0 && messageRoomResult.rows.length === 0) {
       return {
         closedDirectRoomIds: [],
         updatedRoomIds: []
@@ -2180,7 +2189,11 @@ export class SocialService {
     try {
       await client.query('BEGIN');
 
-      for (const row of result.rows) {
+      if (messageRoomResult.rows.length > 0) {
+        await client.query(`DELETE FROM room_messages WHERE sender_id = $1`, [botUserId]);
+      }
+
+      for (const row of membershipResult.rows) {
         const roomId = row.room_id;
         const memberIds = await this.getAllRoomMemberIds(roomId, client);
         roomNotifications.set(roomId, memberIds);
@@ -2198,6 +2211,18 @@ export class SocialService {
            WHERE id = $1`,
           [roomId]
         );
+      }
+
+      for (const row of messageRoomResult.rows) {
+        const roomId = row.room_id;
+        if (!roomId || roomNotifications.has(roomId) || directNotifications.has(roomId)) {
+          continue;
+        }
+
+        const activeMemberIds = await this.getActiveRoomMemberIds(roomId, client);
+        if (activeMemberIds.length > 0) {
+          roomNotifications.set(roomId, activeMemberIds);
+        }
       }
 
       await client.query('COMMIT');
