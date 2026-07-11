@@ -109,6 +109,19 @@ Main deploy (`main` + `docker-compose.yml`):
 bash scripts/deploy-main.sh
 ```
 
+One-time conversion of an existing Synology main folder that was uploaded without `.git`:
+
+```bash
+sudo -i
+curl -fsSL https://raw.githubusercontent.com/pdj14/ourHangout-server/main/scripts/bootstrap-main-git-deploy.sh -o /tmp/bootstrap-main-git-deploy.sh
+sh /tmp/bootstrap-main-git-deploy.sh
+```
+
+The bootstrap script creates a PostgreSQL dump, clones `main` into a temporary directory,
+preserves `.env`, `storage`, and `logs`, keeps the original folder as a timestamped backup,
+then runs `deploy-main.sh` and verifies `/health` and `/ready`. Its default target is
+`/volume1/docker/ourHangout-server`; override it with `TARGET_DIR=/volumeX/docker/<folder>` if needed.
+
 Notes:
 
 - Script aborts if the git worktree is dirty.
