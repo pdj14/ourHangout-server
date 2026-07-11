@@ -9,6 +9,7 @@ type FamilyLabel = 'mother' | 'father' | 'guardian' | 'child';
 type FamilyMemberRole = 'parent' | 'child' | 'guardian';
 type FamilyServiceKey = 'location' | 'schedule' | 'todo' | 'family_calendar';
 type FamilyPermissionLevel = 'none' | 'view' | 'edit' | 'manage';
+const MAX_FAMILY_ROOM_MEMBERS = 50;
 
 type UserIdentityRow = {
   id: string;
@@ -200,8 +201,10 @@ export class FamilyService {
     const note = (params.note || '').trim();
     const expiresAt = new Date(Date.now() + UPGRADE_REQUEST_TTL_DAYS * 24 * 60 * 60 * 1000);
 
-    const inserted = await this.db.query<{ id: string; created_at: Date }>(
-      `INSERT INTO family_upgrade_requests (
+    let inserted;
+    try {
+      inserted = await this.db.query<{ id: string; created_at: Date }>(
+        `INSERT INTO family_upgrade_requests (
          requester_id,
          target_user_id,
          source_relationship_id,
@@ -214,18 +217,24 @@ export class FamilyService {
          updated_at
        )
        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, NOW(), NOW())
-       RETURNING id, created_at`,
-      [
-        params.requesterId,
-        targetUserId,
-        sourceRelationshipId,
-        'parent_child',
-        'guardian',
-        'child',
-        note || null,
-        expiresAt
-      ]
-    );
+         RETURNING id, created_at`,
+        [
+          params.requesterId,
+          targetUserId,
+          sourceRelationshipId,
+          'parent_child',
+          'guardian',
+          'child',
+          note || null,
+          expiresAt
+        ]
+      );
+    } catch (error) {
+      if ((error as { code?: string }).code === '23505') {
+        throw new AppError(409, ErrorCodes.CONFLICT, 'A family upgrade request is already pending.');
+      }
+      throw error;
+    }
 
     const requestId = inserted.rows[0].id;
     this.emitToUsers([params.requesterId, targetUserId], {
@@ -1008,6 +1017,33 @@ export class FamilyService {
     familyGroupId: string,
     request: UpgradeRequestForUpdateRow
   ): Promise<void> {
+    const lockedGroup = await client.query<{ id: string }>(
+      `SELECT id FROM family_groups WHERE id = $1 FOR UPDATE`,
+      [familyGroupId]
+    );
+    if (!lockedGroup.rows[0]) {
+      throw new AppError(404, ErrorCodes.RESOURCE_NOT_FOUND, 'Family group not found.');
+    }
+
+    const incomingUserIds = Array.from(new Set([request.requester_id, request.target_user_id]));
+    const capacity = await client.query<{ active_count: number; existing_incoming_count: number }>(
+      `SELECT COUNT(*)::integer AS active_count,
+              COUNT(*) FILTER (WHERE user_id = ANY($2::uuid[]))::integer AS existing_incoming_count
+       FROM family_group_members
+       WHERE family_group_id = $1
+         AND status = 'active'`,
+      [familyGroupId, incomingUserIds]
+    );
+    const state = capacity.rows[0];
+    const nextActiveCount = state.active_count - state.existing_incoming_count + incomingUserIds.length;
+    if (nextActiveCount > MAX_FAMILY_ROOM_MEMBERS) {
+      throw new AppError(
+        409,
+        ErrorCodes.CONFLICT,
+        `A family group supports at most ${MAX_FAMILY_ROOM_MEMBERS} active members.`
+      );
+    }
+
     await client.query(
       `INSERT INTO family_group_members (
          family_group_id,
@@ -1231,6 +1267,14 @@ export class FamilyService {
       return null;
     }
 
+    const lockedRoom = await client.query<{ id: string }>(
+      `SELECT id FROM rooms WHERE id = $1 FOR UPDATE`,
+      [roomId]
+    );
+    if (!lockedRoom.rows[0]) {
+      throw new AppError(404, ErrorCodes.RESOURCE_NOT_FOUND, 'Family room not found.');
+    }
+
     const groupResult = await client.query<{ name: string | null; status: 'active' | 'archived' }>(
       `SELECT name, status
        FROM family_groups
@@ -1258,6 +1302,13 @@ export class FamilyService {
     );
 
     const activeMembers = membersResult.rows;
+    if (activeMembers.length > MAX_FAMILY_ROOM_MEMBERS) {
+      throw new AppError(
+        409,
+        ErrorCodes.CONFLICT,
+        `Family group exceeds the ${MAX_FAMILY_ROOM_MEMBERS}-member room limit and requires manual cleanup.`
+      );
+    }
     const activeMemberIds = activeMembers.map((member) => member.user_id);
     const isActiveRoom = group.status === 'active' && activeMemberIds.length > 0;
     const title = (group.name || '').trim() || 'Family';

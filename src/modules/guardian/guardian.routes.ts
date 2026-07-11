@@ -14,6 +14,7 @@ export async function guardianRoutes(app: FastifyInstance): Promise<void> {
   app.post(
     '/auth/login',
     {
+      config: { rateLimit: { max: 5, timeWindow: '1 minute' } },
       schema: {
         tags: ['guardian'],
         summary: 'Login to Guardian Console with configured ID/password',
@@ -28,6 +29,10 @@ export async function guardianRoutes(app: FastifyInstance): Promise<void> {
       }
     },
     async (request) => {
+      if (!env.GUARDIAN_CONSOLE_ENABLED) {
+        throw new AppError(503, ErrorCodes.INTERNAL_ERROR, 'Guardian Console login is not configured.');
+      }
+
       const body = request.body as { loginId: string; password: string };
 
       if (!isGuardianConsoleCredentialMatch(body.loginId, body.password)) {
@@ -209,8 +214,11 @@ export async function guardianRoutes(app: FastifyInstance): Promise<void> {
     },
     async (request) => {
       const params = request.params as { userId: string };
-      const backendBaseUrl = `${request.protocol}://${request.headers.host || ''}`.replace(/\/+$/, '');
-      const data = await app.guardianService.requestUserLocationRefresh(request.user.sub, params.userId, backendBaseUrl);
+      const data = await app.guardianService.requestUserLocationRefresh(
+        request.user.sub,
+        params.userId,
+        env.PUBLIC_BASE_URL
+      );
       return { success: true, data };
     }
   );

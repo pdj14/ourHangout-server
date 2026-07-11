@@ -1,7 +1,6 @@
 ﻿import type { FastifyBaseLogger } from 'fastify';
-import type { Pool, PoolClient } from 'pg';
+import type { Pool } from 'pg';
 import { AppError, ErrorCodes } from '../../lib/errors';
-import { toSafeUser } from '../../lib/user';
 
 type ContactType = 'email' | 'phone';
 
@@ -17,6 +16,7 @@ type UserRow = {
   role: string;
   auth_provider: 'local' | 'google';
   display_name: string | null;
+  avatar_url: string | null;
   phone_e164: string | null;
   created_at: Date;
 };
@@ -65,13 +65,28 @@ export class ContactsService {
 
     try {
       await client.query('BEGIN');
+      await client.query('SELECT pg_advisory_xact_lock(hashtext($1))', [`contacts:${params.userId}`]);
 
       if (params.clearMissing) {
         await client.query('DELETE FROM contact_hashes WHERE owner_user_id = $1', [params.userId]);
       }
 
-      for (const contact of contacts) {
-        await this.upsertContact(client, params.userId, contact);
+      if (contacts.length > 0) {
+        await client.query(
+          `INSERT INTO contact_hashes (owner_user_id, contact_type, contact_hash, label, updated_at)
+           SELECT $1, input.contact_type, input.contact_hash, input.label, NOW()
+           FROM UNNEST($2::text[], $3::text[], $4::text[]) AS input(contact_type, contact_hash, label)
+           ON CONFLICT (owner_user_id, contact_type, contact_hash)
+           DO UPDATE SET
+             label = COALESCE(EXCLUDED.label, contact_hashes.label),
+             updated_at = NOW()`,
+          [
+            params.userId,
+            contacts.map((contact) => contact.type),
+            contacts.map((contact) => contact.hash),
+            contacts.map((contact) => contact.label ?? null)
+          ]
+        );
       }
 
       const countResult = await client.query<{ count: string }>(
@@ -99,7 +114,11 @@ export class ContactsService {
     limit: number;
   }): Promise<
     Array<{
-      user: ReturnType<typeof toSafeUser>;
+      user: {
+        id: string;
+        displayName?: string;
+        avatarUri?: string;
+      };
       matchedBy: ContactType;
       sourceLabel?: string;
       matchedAt: string;
@@ -111,6 +130,7 @@ export class ContactsService {
               m.role,
               m.auth_provider,
               m.display_name,
+              m.avatar_url,
               m.phone_e164,
               m.created_at,
               m.matched_by,
@@ -123,6 +143,7 @@ export class ContactsService {
                 candidate.role,
                 candidate.auth_provider,
                 candidate.display_name,
+                candidate.avatar_url,
                 candidate.phone_e164,
                 candidate.created_at,
                 candidate.matched_by,
@@ -134,6 +155,7 @@ export class ContactsService {
                   u.role,
                   u.auth_provider,
                   u.display_name,
+                  u.avatar_url,
                   u.phone_e164,
                   u.created_at,
                   'email'::text AS matched_by,
@@ -153,6 +175,7 @@ export class ContactsService {
                   u.role,
                   u.auth_provider,
                   u.display_name,
+                  u.avatar_url,
                   u.phone_e164,
                   u.created_at,
                   'phone'::text AS matched_by,
@@ -174,7 +197,11 @@ export class ContactsService {
     );
 
     return result.rows.map((row) => ({
-      user: toSafeUser(row),
+      user: {
+        id: row.id,
+        ...(row.display_name?.trim() ? { displayName: row.display_name.trim() } : {}),
+        ...(row.avatar_url ? { avatarUri: row.avatar_url } : {})
+      },
       matchedBy: row.matched_by,
       ...(row.source_label ? { sourceLabel: row.source_label } : {}),
       matchedAt: row.matched_at.toISOString()
@@ -210,15 +237,4 @@ export class ContactsService {
     };
   }
 
-  private async upsertContact(client: PoolClient, userId: string, contact: ContactInput): Promise<void> {
-    await client.query(
-      `INSERT INTO contact_hashes (owner_user_id, contact_type, contact_hash, label, updated_at)
-       VALUES ($1, $2, $3, $4, NOW())
-       ON CONFLICT (owner_user_id, contact_type, contact_hash)
-       DO UPDATE SET
-         label = COALESCE(EXCLUDED.label, contact_hashes.label),
-         updated_at = NOW()`,
-      [userId, contact.type, contact.hash, contact.label ?? null]
-    );
-  }
 }

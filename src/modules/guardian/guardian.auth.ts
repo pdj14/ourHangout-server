@@ -25,7 +25,8 @@ function secureCompare(expected: string, actual: string): boolean {
 }
 
 export function isGuardianConsoleCredentialMatch(loginId: string, password: string): boolean {
-  return secureCompare(env.GUARDIAN_CONSOLE_LOGIN_ID, loginId.trim()) &&
+  return env.GUARDIAN_CONSOLE_ENABLED &&
+    secureCompare(env.GUARDIAN_CONSOLE_LOGIN_ID, loginId.trim()) &&
     secureCompare(env.GUARDIAN_CONSOLE_PASSWORD, password);
 }
 

@@ -106,6 +106,7 @@ export interface RoomMessageDto {
   kind: MessageKind;
   text?: string;
   uri?: string;
+  clientMessageId?: string;
   at: string;
   delivery: MessageDelivery;
   unreadCount?: number;

@@ -4,6 +4,7 @@ export async function authRoutes(app: FastifyInstance): Promise<void> {
   app.post(
     '/signup',
     {
+      config: { rateLimit: { max: 10, timeWindow: '1 minute' } },
       schema: {
         tags: ['auth'],
         summary: 'Sign up with email and password',
@@ -11,8 +12,8 @@ export async function authRoutes(app: FastifyInstance): Promise<void> {
           type: 'object',
           required: ['email', 'password'],
           properties: {
-            email: { type: 'string', format: 'email' },
-            password: { type: 'string', minLength: 8 },
+            email: { type: 'string', format: 'email', maxLength: 254 },
+            password: { type: 'string', minLength: 8, maxLength: 128 },
             role: { type: 'string', enum: ['parent', 'user'], default: 'user' },
             displayName: { type: 'string', minLength: 1, maxLength: 100 }
           }
@@ -41,6 +42,7 @@ export async function authRoutes(app: FastifyInstance): Promise<void> {
   app.post(
     '/google',
     {
+      config: { rateLimit: { max: 20, timeWindow: '1 minute' } },
       schema: {
         tags: ['auth'],
         summary: 'Login or sign up with Google ID token',
@@ -48,7 +50,7 @@ export async function authRoutes(app: FastifyInstance): Promise<void> {
           type: 'object',
           required: ['idToken'],
           properties: {
-            idToken: { type: 'string', minLength: 20 },
+            idToken: { type: 'string', minLength: 20, maxLength: 10000 },
             role: { type: 'string', enum: ['parent', 'user'], default: 'user' }
           }
         }
@@ -80,7 +82,7 @@ export async function authRoutes(app: FastifyInstance): Promise<void> {
           type: 'object',
           required: ['idToken'],
           properties: {
-            idToken: { type: 'string', minLength: 20 }
+            idToken: { type: 'string', minLength: 20, maxLength: 10000 }
           }
         }
       }
@@ -95,6 +97,7 @@ export async function authRoutes(app: FastifyInstance): Promise<void> {
   app.post(
     '/login',
     {
+      config: { rateLimit: { max: 10, timeWindow: '1 minute' } },
       schema: {
         tags: ['auth'],
         summary: 'Login with email and password',
@@ -102,8 +105,8 @@ export async function authRoutes(app: FastifyInstance): Promise<void> {
           type: 'object',
           required: ['email', 'password'],
           properties: {
-            email: { type: 'string', format: 'email' },
-            password: { type: 'string', minLength: 8 }
+            email: { type: 'string', format: 'email', maxLength: 254 },
+            password: { type: 'string', minLength: 8, maxLength: 128 }
           }
         }
       }
@@ -118,6 +121,7 @@ export async function authRoutes(app: FastifyInstance): Promise<void> {
   app.post(
     '/refresh',
     {
+      config: { rateLimit: { max: 30, timeWindow: '1 minute' } },
       schema: {
         tags: ['auth'],
         summary: 'Rotate access/refresh tokens',
@@ -125,7 +129,7 @@ export async function authRoutes(app: FastifyInstance): Promise<void> {
           type: 'object',
           required: ['refreshToken'],
           properties: {
-            refreshToken: { type: 'string', minLength: 32 }
+            refreshToken: { type: 'string', minLength: 32, maxLength: 512 }
           }
         }
       }
@@ -148,7 +152,7 @@ export async function authRoutes(app: FastifyInstance): Promise<void> {
           type: 'object',
           required: ['refreshToken'],
           properties: {
-            refreshToken: { type: 'string', minLength: 32 }
+            refreshToken: { type: 'string', minLength: 32, maxLength: 512 }
           }
         }
       }
@@ -186,8 +190,8 @@ export async function authRoutes(app: FastifyInstance): Promise<void> {
           type: 'object',
           required: ['currentPassword', 'newPassword'],
           properties: {
-            currentPassword: { type: 'string', minLength: 8 },
-            newPassword: { type: 'string', minLength: 8 }
+            currentPassword: { type: 'string', minLength: 8, maxLength: 128 },
+            newPassword: { type: 'string', minLength: 8, maxLength: 128 }
           }
         }
       }

@@ -7,6 +7,7 @@ export async function contactsRoutes(app: FastifyInstance): Promise<void> {
     '/sync',
     {
       preHandler: app.authenticate,
+      config: { rateLimit: { max: 5, timeWindow: '1 minute' } },
       schema: {
         tags: ['contacts'],
         summary: 'Upload hashed contacts for matching',
@@ -63,6 +64,7 @@ export async function contactsRoutes(app: FastifyInstance): Promise<void> {
     '/matches',
     {
       preHandler: app.authenticate,
+      config: { rateLimit: { max: 10, timeWindow: '1 minute' } },
       schema: {
         tags: ['contacts'],
         summary: 'Get users matched from synced contact hashes',

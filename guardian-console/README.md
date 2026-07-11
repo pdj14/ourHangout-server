@@ -19,5 +19,7 @@ Static web console for parent-role operators to inspect and manage key `ourHango
 ## Authentication
 
 - Uses `/v1/guardian/auth/login`.
-- Default fixed credentials are `wowjini0228 / dj369369` unless overridden by server env.
-- Only the configured Guardian Console credentials can access Guardian APIs.
+- Guardian Console login is disabled until both `GUARDIAN_CONSOLE_LOGIN_ID` and
+  `GUARDIAN_CONSOLE_PASSWORD` are configured.
+- Production passwords must be at least 16 characters. Never commit credentials to this repository.
+- Only a Guardian Console token can access Guardian APIs and the global report queue.

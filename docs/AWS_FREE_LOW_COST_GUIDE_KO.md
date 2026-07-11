@@ -88,6 +88,8 @@ cp .env.example .env
 
 - `NODE_ENV=production`
 - `JWT_SECRET=<긴 랜덤 문자열>`
+- `POSTGRES_PASSWORD=<강한 비밀번호>`와 같은 값을 URI 인코딩한 `DATABASE_URL`
+- `PUBLIC_BASE_URL=https://<실제 API 도메인>`
 - `CORS_ORIGINS=<실제 앱 도메인/주소>`
 - `OPENCLAW_MODE` / `OPENCLAW_BASE_URL`
 - (ALB/프록시 뒤면) `TRUST_PROXY=true`
@@ -99,8 +101,7 @@ docker compose up -d --build
 ```
 
 정상 기준:
-- `ourhangout-migrate` 컨테이너: 성공 후 Exit
-- `ourhangout-api`, `postgres`, `redis`: Running
+- `ourhangout-api`, `postgres`, `redis`: Running (`api`가 listen 전에 migration 실행)
 
 ```bash
 docker compose ps
@@ -108,10 +109,13 @@ curl -s http://localhost:3000/health
 curl -s http://localhost:3000/ready
 ```
 
-## 4.5 시드 계정 (테스트용)
+## 4.5 시드 계정 (로컬 개발 전용)
+
+문서화된 공용 비밀번호를 사용하는 seed는 production에서 거부됩니다. 아래 명령은 로컬
+development 환경에서만 사용합니다.
 
 ```bash
-docker compose exec api node dist/scripts/seed.js
+npm run seed
 ```
 
 ## 5) 비용 절약 체크리스트

@@ -3,7 +3,7 @@ import websocket from '@fastify/websocket';
 import { env } from './config/env';
 import { db, closeDb } from './lib/db';
 import { MetricsRegistry } from './lib/metrics';
-import { redis, redisSubscriber, closeRedis } from './lib/redis';
+import { redis, redisSubscriber, connectRedis, closeRedis } from './lib/redis';
 import { AuthService } from './modules/auth/auth.service';
 import { authRoutes } from './modules/auth/auth.routes';
 import { ChatService } from './modules/chat/chat.service';
@@ -36,35 +36,66 @@ import { registerErrorHandlers } from './plugins/error-handler';
 import { securityPlugin } from './plugins/security';
 import { swaggerPlugin } from './plugins/swagger';
 
-const MAX_UPLOAD_BODY_BYTES = 200 * 1024 * 1024;
+type LoggableRequest = {
+  method?: string;
+  url?: string;
+  hostname?: string;
+  ip?: string;
+};
+
+function sanitizeUrl(url?: string): string | undefined {
+  return url?.split('?', 1)[0];
+}
 
 export async function buildServer(): Promise<FastifyInstance> {
   const app = Fastify({
     trustProxy: env.TRUST_PROXY,
-    bodyLimit: MAX_UPLOAD_BODY_BYTES,
+    bodyLimit: env.HTTP_BODY_LIMIT_BYTES,
+    connectionTimeout: env.HTTP_CONNECTION_TIMEOUT_MS,
+    requestTimeout: env.HTTP_REQUEST_TIMEOUT_MS,
+    handlerTimeout: env.HTTP_HANDLER_TIMEOUT_MS,
+    maxRequestsPerSocket: 1000,
     logger: {
-      level: env.LOG_LEVEL
+      level: env.LOG_LEVEL,
+      redact: ['req.headers.authorization', 'req.headers.cookie'],
+      serializers: {
+        req(request: LoggableRequest) {
+          return {
+            method: request.method,
+            url: sanitizeUrl(request.url),
+            hostname: request.hostname,
+            remoteAddress: request.ip
+          };
+        }
+      }
     }
   });
 
-  app.addContentTypeParser(/^image\/.*/, { parseAs: 'buffer', bodyLimit: MAX_UPLOAD_BODY_BYTES }, (_request, body, done) => {
+  app.addContentTypeParser(/^image\/.*/, { parseAs: 'buffer', bodyLimit: env.HTTP_BODY_LIMIT_BYTES }, (_request, body, done) => {
     done(null, body);
   });
 
-  app.addContentTypeParser(/^video\/.*/, { parseAs: 'buffer', bodyLimit: MAX_UPLOAD_BODY_BYTES }, (_request, body, done) => {
+  app.addContentTypeParser(/^video\/.*/, { parseAs: 'buffer', bodyLimit: env.HTTP_BODY_LIMIT_BYTES }, (_request, body, done) => {
     done(null, body);
   });
 
   app.addContentTypeParser(
     /^application\/(octet-stream|vnd\.android\.package-archive)$/i,
-    { parseAs: 'buffer', bodyLimit: MAX_UPLOAD_BODY_BYTES },
+    { parseAs: 'buffer', bodyLimit: env.HTTP_BODY_LIMIT_BYTES },
     (_request, body, done) => {
       done(null, body);
     }
   );
 
-  await app.register(websocket);
-  await app.register(swaggerPlugin);
+  await app.register(websocket, {
+    options: {
+      maxPayload: env.WEBSOCKET_MAX_PAYLOAD_BYTES,
+      perMessageDeflate: false
+    }
+  });
+  if (env.SWAGGER_ENABLED) {
+    await app.register(swaggerPlugin);
+  }
   await app.register(securityPlugin);
 
   const metrics = new MetricsRegistry();
@@ -158,6 +189,7 @@ export async function buildServer(): Promise<FastifyInstance> {
   await app.register(guardianConsoleRoutes);
 
   app.addHook('onReady', async () => {
+    await connectRedis();
     await app.eventBus.start(async (event) => {
       await app.chatService.handleEvent(event);
     });
@@ -165,6 +197,7 @@ export async function buildServer(): Promise<FastifyInstance> {
 
   app.addHook('onClose', async () => {
     app.openClawConnectorHub.closeAll();
+    app.connectionManager.closeAll();
     await app.eventBus.close();
     await closeRedis();
     await closeDb();

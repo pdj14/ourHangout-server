@@ -1,9 +1,11 @@
 import { createReadStream } from 'fs';
 import type { FastifyInstance } from 'fastify';
+import { env } from '../../config/env';
+import { admitBinaryUpload } from '../../lib/binary-upload-gate';
 import { AppError, ErrorCodes } from '../../lib/errors';
 import type { MessageKind } from './social.types';
 
-const MAX_MEDIA_UPLOAD_BYTES = 200 * 1024 * 1024;
+const MAX_MEDIA_UPLOAD_BYTES = env.BINARY_BODY_LIMIT_BYTES;
 
 export async function socialRoutes(app: FastifyInstance): Promise<void> {
   app.get(
@@ -68,7 +70,7 @@ export async function socialRoutes(app: FastifyInstance): Promise<void> {
             longitude: { type: 'number' },
             accuracyM: { type: 'number', minimum: 0 },
             capturedAt: { type: 'string' },
-            source: { type: 'string', enum: ['heartbeat', 'precision_refresh', 'manual_refresh'] }
+            source: { type: 'string', enum: ['heartbeat', 'precision_refresh', 'manual_refresh', 'manual_enable'] }
           }
         }
       }
@@ -79,7 +81,7 @@ export async function socialRoutes(app: FastifyInstance): Promise<void> {
         longitude: number;
         accuracyM?: number;
         capturedAt?: string;
-        source: 'heartbeat' | 'precision_refresh' | 'manual_refresh';
+        source: 'heartbeat' | 'precision_refresh' | 'manual_refresh' | 'manual_enable';
       };
       const data = await app.socialService.updateMyLocation({
         userId: request.user.sub,
@@ -87,7 +89,7 @@ export async function socialRoutes(app: FastifyInstance): Promise<void> {
         longitude: body.longitude,
         accuracyM: body.accuracyM,
         capturedAt: body.capturedAt,
-        source: body.source
+        source: body.source === 'manual_enable' ? 'manual_refresh' : body.source
       });
       return { success: true, data };
     }
@@ -112,6 +114,7 @@ export async function socialRoutes(app: FastifyInstance): Promise<void> {
     '/me/avatar/upload-url',
     {
       preHandler: app.authenticate,
+      config: { rateLimit: { max: 20, timeWindow: '1 minute' } },
       schema: {
         tags: ['social'],
         summary: 'Issue avatar upload URL',
@@ -163,6 +166,7 @@ export async function socialRoutes(app: FastifyInstance): Promise<void> {
     '/friends/search',
     {
       preHandler: app.authenticate,
+      config: { rateLimit: { max: 20, timeWindow: '1 minute' } },
       schema: {
         tags: ['social'],
         summary: 'Search users for friend',
@@ -170,7 +174,7 @@ export async function socialRoutes(app: FastifyInstance): Promise<void> {
           type: 'object',
           required: ['q'],
           properties: {
-            q: { type: 'string', minLength: 1, maxLength: 100 },
+            q: { type: 'string', format: 'email', minLength: 3, maxLength: 254 },
             limit: { type: 'number', minimum: 1, maximum: 50 }
           }
         }
@@ -399,6 +403,9 @@ export async function socialRoutes(app: FastifyInstance): Promise<void> {
             title: { type: 'string', minLength: 1, maxLength: 100 },
             memberUserIds: {
               type: 'array',
+              minItems: 1,
+              maxItems: 49,
+              uniqueItems: true,
               items: { type: 'string', format: 'uuid' }
             }
           }
@@ -450,6 +457,8 @@ export async function socialRoutes(app: FastifyInstance): Promise<void> {
             memberUserIds: {
               type: 'array',
               minItems: 1,
+              maxItems: 49,
+              uniqueItems: true,
               items: { type: 'string', format: 'uuid' }
             }
           }
@@ -478,6 +487,8 @@ export async function socialRoutes(app: FastifyInstance): Promise<void> {
             memberUserIds: {
               type: 'array',
               minItems: 1,
+              maxItems: 49,
+              uniqueItems: true,
               items: { type: 'string', format: 'uuid' }
             }
           }
@@ -1123,12 +1134,11 @@ export async function socialRoutes(app: FastifyInstance): Promise<void> {
     },
     async (request) => {
       const params = request.params as { roomId: string; targetUserId: string };
-      const backendBaseUrl = `${request.protocol}://${request.headers.host || ''}`.replace(/\/+$/, '');
       const data = await app.socialService.requestFamilyRoomLocationRefresh({
         userId: request.user.sub,
         roomId: params.roomId,
         targetUserId: params.targetUserId,
-        backendBaseUrl
+        backendBaseUrl: env.PUBLIC_BASE_URL
       });
       return { success: true, data };
     }
@@ -1194,7 +1204,7 @@ export async function socialRoutes(app: FastifyInstance): Promise<void> {
           required: ['kind'],
           properties: {
             clientMessageId: { type: 'string', minLength: 1, maxLength: 128 },
-            kind: { type: 'string', enum: ['text', 'image', 'video', 'system'] },
+            kind: { type: 'string', enum: ['text', 'image', 'video'] },
             text: { type: 'string', minLength: 1, maxLength: 5000 },
             uri: { type: 'string', maxLength: 2048 }
           }
@@ -1259,6 +1269,7 @@ export async function socialRoutes(app: FastifyInstance): Promise<void> {
     '/media/upload-url',
     {
       preHandler: app.authenticate,
+      config: { rateLimit: { max: 20, timeWindow: '1 minute' } },
       schema: {
         tags: ['social'],
         summary: 'Issue media upload URL',
@@ -1283,7 +1294,8 @@ export async function socialRoutes(app: FastifyInstance): Promise<void> {
   app.put(
     '/media/upload',
     {
-      preHandler: app.authenticate,
+      onRequest: [app.authenticate, admitBinaryUpload],
+      config: { rateLimit: { max: 10, timeWindow: '1 minute' } },
       bodyLimit: MAX_MEDIA_UPLOAD_BYTES,
       schema: {
         tags: ['social'],
@@ -1366,15 +1378,22 @@ export async function socialRoutes(app: FastifyInstance): Promise<void> {
 
       const rangeHeader = request.headers.range;
       if (rangeHeader) {
-        const match = /bytes=(\d*)-(\d*)/.exec(rangeHeader);
-        if (!match) {
+        const match = /^bytes=(\d*)-(\d*)$/.exec(rangeHeader.trim());
+        if (!match || (!match[1] && !match[2])) {
           reply.code(416);
           reply.header('Content-Range', `bytes */${asset.size}`);
           return reply.send();
         }
 
-        const start = match[1] ? Number(match[1]) : 0;
-        const end = match[2] ? Number(match[2]) : asset.size - 1;
+        const suffixLength = !match[1] && match[2] ? Number(match[2]) : null;
+        const start = suffixLength !== null
+          ? Math.max(asset.size - suffixLength, 0)
+          : Number(match[1]);
+        const end = suffixLength !== null
+          ? asset.size - 1
+          : match[2]
+            ? Number(match[2])
+            : asset.size - 1;
         const safeStart = Number.isFinite(start) ? start : 0;
         const safeEnd = Number.isFinite(end) ? Math.min(end, asset.size - 1) : asset.size - 1;
 
@@ -1452,10 +1471,10 @@ export async function socialRoutes(app: FastifyInstance): Promise<void> {
   app.get(
     '/admin/reports',
     {
-      preHandler: app.authenticate,
+      preHandler: app.authenticateGuardian,
       schema: {
         tags: ['social'],
-        summary: 'List report queue (parent role)',
+        summary: 'List report queue (Guardian Console only)',
         querystring: {
           type: 'object',
           properties: {
@@ -1485,10 +1504,10 @@ export async function socialRoutes(app: FastifyInstance): Promise<void> {
   app.patch(
     '/admin/reports/:reportId',
     {
-      preHandler: app.authenticate,
+      preHandler: app.authenticateGuardian,
       schema: {
         tags: ['social'],
-        summary: 'Update report status (parent role)',
+        summary: 'Update report status (Guardian Console only)',
         params: {
           type: 'object',
           required: ['reportId'],

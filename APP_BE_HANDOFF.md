@@ -53,7 +53,7 @@
   - 메시지 타입: `text | image | video | system`
 - 신고:
   - `POST /v1/rooms/:roomId/report`
-  - `GET /v1/admin/reports` (parent 권한)
+  - `GET /v1/admin/reports` (Guardian Console 전용)
 
 ## 5) WebSocket 구현 상태
 
@@ -64,7 +64,6 @@
   - `room.updated`
   - `room.unread.updated`
   - `friend.updated`
-  - `report.received`
 - 클라이언트 인바운드 명령:
   - `message.send`
   - `message.read`

@@ -9,6 +9,18 @@ type EventHandler = (event: ChatEvent) => Promise<void>;
 export class RedisChatEventBus {
   private started = false;
   private handler?: EventHandler;
+  private readonly onMessage = async (channel: string, rawMessage: string): Promise<void> => {
+    if (channel !== CHANNEL_NAME || !this.handler) {
+      return;
+    }
+
+    try {
+      const parsed = JSON.parse(rawMessage) as ChatEvent;
+      await this.handler(parsed);
+    } catch (error) {
+      this.logger.error({ error }, 'Failed to consume chat event');
+    }
+  };
 
   constructor(
     private readonly pubClient: Redis,
@@ -23,18 +35,7 @@ export class RedisChatEventBus {
 
     this.handler = handler;
 
-    this.subClient.on('message', async (channel, rawMessage) => {
-      if (channel !== CHANNEL_NAME || !this.handler) {
-        return;
-      }
-
-      try {
-        const parsed = JSON.parse(rawMessage) as ChatEvent;
-        await this.handler(parsed);
-      } catch (error) {
-        this.logger.error({ error, rawMessage }, 'Failed to consume chat event');
-      }
-    });
+    this.subClient.on('message', this.onMessage);
 
     await this.subClient.subscribe(CHANNEL_NAME);
     this.started = true;
@@ -51,6 +52,8 @@ export class RedisChatEventBus {
     }
 
     await this.subClient.unsubscribe(CHANNEL_NAME);
+    this.subClient.off('message', this.onMessage);
+    this.handler = undefined;
     this.started = false;
   }
 }

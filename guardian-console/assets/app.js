@@ -30,7 +30,7 @@ const COPY = {
     sign_in: '로그인',
     signing_in: '로그인 중...',
     footer_note:
-      '이 페이지는 /v1/auth/google 과 /v1/guardian/* 를 사용합니다. 부모 계정과 master 계정만 접근할 수 있습니다.',
+      '이 페이지는 /v1/guardian/* 를 사용하며 설정된 Guardian Console 자격증명으로만 접근할 수 있습니다.',
     dashboard_loading_title: '개요',
     dashboard_loading_body: '서버에서 요약 정보를 불러오는 중입니다.',
     dashboard_loading_state: 'DB 요약, 가족 연결, 저장공간 경고를 읽는 중입니다.',
@@ -243,7 +243,7 @@ const COPY = {
     sign_in: 'Sign In',
     signing_in: 'Signing in...',
     footer_note:
-      'This page uses /v1/auth/google and /v1/guardian/*. Access is restricted to parent and configured master accounts.',
+      'This page uses /v1/guardian/* and requires the configured Guardian Console credentials.',
     footer_note_credentials:
       'This page now uses /v1/guardian/auth/login and only the configured fixed credentials are accepted.',
     dashboard_loading_title: 'Overview',

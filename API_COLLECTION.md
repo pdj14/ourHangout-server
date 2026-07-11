@@ -335,12 +335,12 @@ curl -s -X POST http://localhost:3000/v1/rooms/<ROOM_ID>/report \
 
 ```bash
 curl -s "http://localhost:3000/v1/admin/reports?status=open&limit=30" \
-  -H "Authorization: Bearer <PARENT_ACCESS_TOKEN>"
+  -H "Authorization: Bearer <GUARDIAN_ACCESS_TOKEN>"
 ```
 
 ```bash
 curl -s -X PATCH http://localhost:3000/v1/admin/reports/<REPORT_ID> \
-  -H "Authorization: Bearer <PARENT_ACCESS_TOKEN>" \
+  -H "Authorization: Bearer <GUARDIAN_ACCESS_TOKEN>" \
   -H "Content-Type: application/json" \
   -d '{"status":"reviewed"}'
 ```
@@ -376,7 +376,6 @@ Expected push events:
 - `room.updated`
 - `room.unread.updated`
 - `friend.updated`
-- `report.received`
 
 Manual ACK via websocket:
 

@@ -1,5 +1,6 @@
 import { promises as fs } from 'fs';
-import { resolve } from 'path';
+import { randomUUID } from 'crypto';
+import { isAbsolute, relative, resolve } from 'path';
 import type { FastifyBaseLogger } from 'fastify';
 import { env } from '../../config/env';
 import { AppError, ErrorCodes } from '../../lib/errors';
@@ -129,6 +130,8 @@ export class AppUpdatesService {
 
   private readonly manifestPath = resolve(this.storageRoot, 'manifest.json');
 
+  private mutationTail: Promise<void> = Promise.resolve();
+
   constructor(private readonly logger: FastifyBaseLogger) {}
 
   private getLatestDownloadUrl(): string {
@@ -141,7 +144,8 @@ export class AppUpdatesService {
 
   private getReleasePath(fileName: string): string {
     const absolutePath = resolve(this.storageRoot, fileName);
-    if (!absolutePath.startsWith(this.storageRoot)) {
+    const relativePath = relative(this.storageRoot, absolutePath);
+    if (!relativePath || relativePath.startsWith('..') || isAbsolute(relativePath)) {
       throw new AppError(400, ErrorCodes.VALIDATION_ERROR, 'Invalid app release file path.');
     }
     return absolutePath;
@@ -172,20 +176,44 @@ export class AppUpdatesService {
 
   private async writeManifest(manifest: AppUpdateManifest): Promise<void> {
     await this.ensureStorageRoot();
-    await fs.writeFile(this.manifestPath, `${JSON.stringify(manifest, null, 2)}\n`, 'utf8');
+    const temporaryPath = resolve(this.storageRoot, `.manifest-${process.pid}-${randomUUID()}.tmp`);
+    try {
+      await fs.writeFile(temporaryPath, `${JSON.stringify(manifest, null, 2)}\n`, { encoding: 'utf8', flag: 'wx' });
+      await fs.rename(temporaryPath, this.manifestPath);
+    } finally {
+      await fs.unlink(temporaryPath).catch(() => undefined);
+    }
   }
 
   private async loadManifest(): Promise<AppUpdateManifest> {
     const manifest = await this.readManifest();
-    const nextHistory = manifest.history.slice(0, MAX_RELEASE_HISTORY);
-    if (nextHistory.length === manifest.history.length) {
-      return manifest;
-    }
+    return { history: manifest.history.slice(0, MAX_RELEASE_HISTORY) };
+  }
 
-    const nextManifest = { history: nextHistory };
-    await this.writeManifest(nextManifest);
-    await this.cleanupOrphanedReleaseFiles(nextHistory);
-    return nextManifest;
+  private async withMutationLock<T>(operation: () => Promise<T>): Promise<T> {
+    const previous = this.mutationTail;
+    let release!: () => void;
+    this.mutationTail = new Promise<void>((resolveLock) => {
+      release = resolveLock;
+    });
+
+    await previous;
+    try {
+      return await operation();
+    } finally {
+      release();
+    }
+  }
+
+  private async writeReleaseFile(fileName: string, bytes: Buffer): Promise<void> {
+    await this.ensureStorageRoot();
+    const temporaryPath = resolve(this.storageRoot, `.release-${process.pid}-${randomUUID()}.tmp`);
+    try {
+      await fs.writeFile(temporaryPath, bytes, { flag: 'wx' });
+      await fs.rename(temporaryPath, this.getReleasePath(fileName));
+    } finally {
+      await fs.unlink(temporaryPath).catch(() => undefined);
+    }
   }
 
   private async cleanupOrphanedReleaseFiles(history: StoredAppRelease[]): Promise<void> {
@@ -265,6 +293,9 @@ export class AppUpdatesService {
     if (!Buffer.isBuffer(params.bytes) || params.bytes.byteLength === 0) {
       throw new AppError(400, ErrorCodes.VALIDATION_ERROR, 'APK binary body is required.');
     }
+    if (params.bytes.byteLength > env.BINARY_BODY_LIMIT_BYTES) {
+      throw new AppError(413, ErrorCodes.VALIDATION_ERROR, 'APK binary body exceeds the configured upload limit.');
+    }
 
     const fileName = pickReleaseFileName(version, params.fileName);
     const mimeType = (params.mimeType || '').trim() || DEFAULT_APK_MIME_TYPE;
@@ -280,19 +311,20 @@ export class AppUpdatesService {
       publishedAt: now
     };
 
-    await this.ensureStorageRoot();
-    await fs.writeFile(this.getReleasePath(fileName), params.bytes);
+    return this.withMutationLock(async () => {
+      await this.writeReleaseFile(fileName, params.bytes);
 
-    const manifest = await this.loadManifest();
-    const nextHistory = [
-      nextRelease,
-      ...manifest.history.filter((record) => record.version !== version)
-    ].slice(0, MAX_RELEASE_HISTORY);
+      const manifest = await this.loadManifest();
+      const nextHistory = [
+        nextRelease,
+        ...manifest.history.filter((record) => record.version !== version)
+      ].slice(0, MAX_RELEASE_HISTORY);
 
-    await this.writeManifest({ history: nextHistory });
-    await this.cleanupOrphanedReleaseFiles(nextHistory);
+      await this.writeManifest({ history: nextHistory });
+      await this.cleanupOrphanedReleaseFiles(nextHistory);
 
-    return this.buildRelease(nextRelease, true);
+      return this.buildRelease(nextRelease, true);
+    });
   }
 
   async deleteRelease(version: string): Promise<DeleteAppReleaseResult> {
@@ -301,35 +333,37 @@ export class AppUpdatesService {
       throw new AppError(400, ErrorCodes.VALIDATION_ERROR, 'Version is required.');
     }
 
-    const manifest = await this.loadManifest();
-    const target = manifest.history.find((record) => record.version === normalizedVersion);
-    if (!target) {
-      throw new AppError(404, ErrorCodes.RESOURCE_NOT_FOUND, 'App release version not found.');
-    }
+    return this.withMutationLock(async () => {
+      const manifest = await this.loadManifest();
+      const target = manifest.history.find((record) => record.version === normalizedVersion);
+      if (!target) {
+        throw new AppError(404, ErrorCodes.RESOURCE_NOT_FOUND, 'App release version not found.');
+      }
 
-    const nextHistory = manifest.history.filter((record) => record.version !== normalizedVersion);
-    await this.writeManifest({ history: nextHistory });
-    await this.cleanupOrphanedReleaseFiles(nextHistory);
+      const nextHistory = manifest.history.filter((record) => record.version !== normalizedVersion);
+      await this.writeManifest({ history: nextHistory });
 
-    const fileStillReferenced = nextHistory.some((record) => record.fileName === target.fileName);
-    let fileDeleted = false;
-    if (!fileStillReferenced) {
-      try {
-        await fs.unlink(this.getReleasePath(target.fileName));
-        fileDeleted = true;
-      } catch (error) {
-        if ((error as NodeJS.ErrnoException).code !== 'ENOENT') {
-          throw error;
+      const fileStillReferenced = nextHistory.some((record) => record.fileName === target.fileName);
+      let fileDeleted = false;
+      if (!fileStillReferenced) {
+        try {
+          await fs.unlink(this.getReleasePath(target.fileName));
+          fileDeleted = true;
+        } catch (error) {
+          if ((error as NodeJS.ErrnoException).code !== 'ENOENT') {
+            throw error;
+          }
         }
       }
-    }
+      await this.cleanupOrphanedReleaseFiles(nextHistory);
 
-    return {
-      version: target.version,
-      fileName: target.fileName,
-      fileDeleted,
-      latestVersion: nextHistory[0]?.version ?? null
-    };
+      return {
+        version: target.version,
+        fileName: target.fileName,
+        fileDeleted,
+        latestVersion: nextHistory[0]?.version ?? null
+      };
+    });
   }
 
   async getLatestDownloadAsset(): Promise<AppUpdateDownloadAsset> {

@@ -21,7 +21,7 @@ Node.js + TypeScript backend for **Our Hangout**, designed for local validation 
   - message kinds (`text/image/video/system`) + cursor pagination
   - room read API (`POST /rooms/:roomId/read`) with `delivery=read`
   - media upload URL issue/complete
-  - abuse report API + parent report queue
+  - abuse report API + Guardian-only report queue
   - push token register/remove
 - In-app bot model for OpenClaw
   - default bot auto-provision (`openclaw-assistant`)
@@ -36,22 +36,22 @@ Node.js + TypeScript backend for **Our Hangout**, designed for local validation 
   - protocol reference: `docs/OPENCLAW_CONNECTOR_PROTOCOL.md`
 - Basic operational endpoints
   - `/health`, `/ready`, `/metrics`
-- OpenAPI docs
+- OpenAPI docs (enabled by default only outside production)
   - `/docs` (UI), `/documentation/json` (JSON)
-- Docker Compose for Synology compatibility (`migrate`, `api`, `postgres`, `redis`)
+- Docker Compose for Synology compatibility (`api`, `postgres`, `redis`)
 
 ## 2) Quick start (local Node)
 
 ### 2.1 Prerequisites
 
-- Node.js 20+
+- Node.js 22+ (Node.js 24 LTS recommended)
 - PostgreSQL 16+
 - Redis 7+
 
 ### 2.2 Setup
 
 ```bash
-cd C:/workspace/ourHome/ourhangout-backend
+cd C:/workspace/ourHangoutFamily/ourHangout-server
 cp .env.example .env
 ```
 
@@ -68,7 +68,8 @@ OPENCLAW_CONNECTOR_TOKEN=<long-random-secret>
 ### 2.3 Install + migrate + seed + run
 
 ```bash
-npm install
+npm ci
+npm run migration:preflight
 npm run migrate
 npm run seed
 npm run dev
@@ -81,20 +82,20 @@ Server default: `http://localhost:3000`
 ### 3.1 Setup env
 
 ```bash
-cd C:/workspace/ourHome/ourhangout-backend
+cd C:/workspace/ourHangoutFamily/ourHangout-server
 cp .env.example .env
 ```
 
-Default `.env.example` is already Docker-network friendly (`postgres`, `redis` hostnames).
-Run migrations explicitly before recreating `api`.
+Default `.env.example` is Docker-network friendly (`postgres`, `redis` hostnames). Set a strong
+`POSTGRES_PASSWORD` (at least 16 characters), matching URI-encoded credentials in `DATABASE_URL`, `JWT_SECRET`, and an externally
+reachable `PUBLIC_BASE_URL` before production use. The production Compose file forces
+`NODE_ENV=production`; the development file forces `NODE_ENV=development`.
+The API runs the advisory-locked migrations before it starts listening.
 
 ### 3.2 Start stack
 
 ```bash
-docker compose build migrate api
-docker compose up -d postgres redis
-docker compose run --rm migrate
-docker compose up -d api
+docker compose up -d --build
 ```
 
 PostgreSQL and Redis are intentionally not exposed on host ports by default. Containers communicate over the internal Docker network.
@@ -124,7 +125,10 @@ bash scripts/deploy-main.sh
 Notes:
 
 - Script aborts if the git worktree is dirty.
+- Script runs duplicate-data migration preflight before stopping the old API; resolve any reported rows using the audit document.
 - If you really need to deploy with local changes, run `ALLOW_DIRTY=1 bash scripts/deploy-dev.sh` (or `deploy-main.sh`).
+- On Synology, if `git` is installed outside the default `PATH`, rerun with `GIT_BIN=/usr/local/bin/git bash scripts/deploy-main.sh`.
+- These deploy scripts require the project directory itself to be a real `git clone` with a `.git` directory.
 - Required directories are created automatically: `logs`, `storage/media`, `storage/app-updates`.
 
 ## 4) Synology NAS deployment (Container Manager)
@@ -154,12 +158,21 @@ Use this when moving from NAS/single-node to managed cloud (ALB + ECS/EC2 + RDS 
 | `PORT` | no | API port (container internal default `3000`) |
 | `TRUST_PROXY` | no | `true/false`, proxy hops, or CSV list for Fastify `trustProxy` |
 | `JWT_SECRET` | yes | JWT signing secret (>=32 chars) |
-| `PUBLIC_BASE_URL` | no | Public base URL used for issued media file/upload URLs (defaults to `http://localhost:<PORT>`) |
+| `PUBLIC_BASE_URL` | production | Public origin used for media URLs and location callbacks; explicit non-loopback URL required in production |
 | `MEDIA_STORAGE_DIR` | no | Local directory for uploaded media files (defaults to `storage/media`) |
+| `MEDIA_USER_QUOTA_BYTES` | no | Per-user completed/pending media quota |
+| `BINARY_BODY_LIMIT_BYTES` | no | Maximum media/APK upload body size |
+| `BINARY_UPLOAD_CONCURRENCY` | no | Maximum in-flight buffered binary uploads per API process (default `2`) |
+| `BINARY_UPLOAD_QUEUE_LIMIT` | no | Maximum requests waiting before binary body parsing (default `20`) |
+| `BINARY_UPLOAD_QUEUE_TIMEOUT_MS` | no | Maximum wait for a binary upload slot (default `15000`) |
 | `GOOGLE_CLIENT_ID` | no | Google OAuth client id (single audience, backward compatibility) |
 | `GOOGLE_CLIENT_IDS` | no | Comma-separated Google OAuth client ids (recommended for app/web multi-audience) |
 | `DATABASE_URL` | yes | PostgreSQL connection string |
+| `MIGRATION_STATEMENT_TIMEOUT_MS` | no | Migration statement timeout; `0` disables it for long index builds |
+| `MIGRATION_LOCK_TIMEOUT_MS` | no | Maximum wait for a migration DB lock (default `30000`) |
 | `REDIS_URL` | yes | Redis connection string |
+| `FCM_TIMEOUT_MS` | no | Per-request/token-acquisition FCM timeout |
+| `FCM_SEND_BUDGET_MS` | no | Total time budget for one bounded FCM send operation |
 | `CORS_ORIGINS` | yes | Comma-separated allowed origins |
 | `OPENCLAW_MODE` | yes | `mock`, `http`, or `connector` |
 | `OPENCLAW_BASE_URL` | yes (http mode) | OpenClaw gateway base URL |
@@ -169,17 +182,17 @@ Use this when moving from NAS/single-node to managed cloud (ALB + ECS/EC2 + RDS 
 | `RATE_LIMIT_MAX` | no | Rate limit max requests/window |
 | `RATE_LIMIT_WINDOW` | no | Fastify rate-limit window |
 | `RATE_LIMIT_REDIS_NAMESPACE` | no | Redis key prefix for distributed rate limiting |
-| `RATE_LIMIT_SKIP_ON_ERROR` | no | `true` to fail-open if Redis rate-limit store errors |
-
-Deployment note:
-When using local media uploads, keep `MEDIA_STORAGE_DIR=storage/media` and preserve that path with a Docker volume bind such as `./storage/media:/app/storage/media`.
-| `PAIRING_CODE_TTL_SECONDS` | no | Pairing code TTL |
+| `RATE_LIMIT_SKIP_ON_ERROR` | no | Keep `false` in production so abuse protection does not fail open |
+| `PAIRING_CODE_TTL_SECONDS` | no | Relationship pairing code TTL (default 300 seconds) |
 | `ACCESS_TOKEN_TTL` | no | Access token lifetime |
 | `REFRESH_TOKEN_TTL_DAYS` | no | Refresh token lifetime (days) |
 | `GUARDIAN_CONSOLE_LOGIN_ID` | no | Fixed Guardian Console login id |
 | `GUARDIAN_CONSOLE_PASSWORD` | no | Fixed Guardian Console password |
 | `GUARDIAN_CONSOLE_ACCESS_TOKEN_TTL` | no | Guardian Console access token lifetime |
 | `LOG_LEVEL` | no | Pino log level |
+
+Deployment note:
+When using local media uploads, keep `MEDIA_STORAGE_DIR=storage/media` and preserve that path with a Docker volume bind such as `./storage/media:/app/storage/media`.
 
 `OPENCLAW_BASE_URL` note:
 If API runs in Docker, `127.0.0.1` points to API container itself. Use a reachable host/IP from the container network.
@@ -192,6 +205,7 @@ Run connector client on OpenClaw-side device and connect to:
 
 See `API_COLLECTION.md` for full commands.
 See `CHAT_BACKEND_REQUIRED_LIST.md` for backend checklist and contact-integration notes.
+See `docs/SERVER_AUDIT_2026-07-10_KO.md` for the latest security/performance audit, breaking changes, and deployment checklist.
 
 - `GET /health` returns `success: true`
 - `GET /ready` returns DB/Redis readiness
@@ -207,7 +221,7 @@ See `CHAT_BACKEND_REQUIRED_LIST.md` for backend checklist and contact-integratio
 - websocket `/v1/ws?token=<accessToken>` receives `chat.message` and `chat.ack`
 - websocket `/v1/ws?token=<accessToken>` also supports:
   - inbound commands: `message.send`, `message.read`
-  - push events: `message.new`, `message.delivery`, `room.updated`, `room.unread.updated`, `friend.updated`, `report.received`
+  - push events: `message.new`, `message.delivery`, `room.updated`, `room.unread.updated`, `friend.updated`
 - with `OPENCLAW_MODE=mock`, bot-room message round-trip includes mock reply
 - with `OPENCLAW_MODE=http` and invalid base URL, upstream failure logs are explicit
 - with `OPENCLAW_MODE=connector` and no connector connected, OpenClaw provider ping/report shows unavailable
@@ -255,7 +269,7 @@ npm run connector:dev
 
 ## 7) Default seed users
 
-After `npm run seed`:
+`npm run seed` is development-only and refuses to run with `NODE_ENV=production`. After running it locally:
 
 - `parent@ourhangout.local` / `Parent123!`
 - `child@ourhangout.local` / `Child123!`

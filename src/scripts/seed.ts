@@ -1,5 +1,6 @@
 ﻿import bcrypt from 'bcryptjs';
 import { db, closeDb } from '../lib/db';
+import { env } from '../config/env';
 
 const SEED_USERS = [
   {
@@ -17,6 +18,10 @@ const SEED_USERS = [
 ] as const;
 
 async function seedUsers(): Promise<void> {
+  if (env.NODE_ENV === 'production') {
+    throw new Error('Refusing to create documented development accounts in production.');
+  }
+
   for (const user of SEED_USERS) {
     const passwordHash = await bcrypt.hash(user.password, 10);
 
@@ -24,10 +29,7 @@ async function seedUsers(): Promise<void> {
       `INSERT INTO users (email, password_hash, role, display_name)
        VALUES ($1, $2, $3, $4)
        ON CONFLICT (email)
-       DO UPDATE SET
-         password_hash = EXCLUDED.password_hash,
-         role = EXCLUDED.role,
-         display_name = EXCLUDED.display_name`,
+       DO NOTHING`,
       [user.email, passwordHash, user.role, user.displayName]
     );
 

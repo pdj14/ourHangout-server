@@ -1,13 +1,14 @@
 import { createHash, randomBytes, randomUUID } from 'crypto';
 import { promises as fs } from 'fs';
 import type { FastifyBaseLogger } from 'fastify';
-import { dirname, relative, resolve } from 'path';
+import { dirname, isAbsolute, relative, resolve } from 'path';
 import type { Pool, PoolClient } from 'pg';
 import { env } from '../../config/env';
 import { AppError, ErrorCodes } from '../../lib/errors';
 import { FcmPushService } from '../../lib/push/fcm-push.service';
 import type { ConnectionManager } from '../chat/connection-manager';
 import type { ClawBridgeService } from '../openclaw/claw-bridge.service';
+import { GUARDIAN_CONSOLE_SUB } from '../guardian/guardian.auth';
 import type {
   FamilyRoomMemberProfileDto,
   FamilyRoomRelationshipDto,
@@ -86,6 +87,7 @@ type FriendRequestRow = {
   created_at: Date;
   peer_name: string | null;
   peer_email: string;
+  peer_avatar_url: string | null;
 };
 
 type RoomListRow = {
@@ -176,9 +178,10 @@ type RoomMessageRow = {
   kind: MessageKind;
   text: string | null;
   media_url: string | null;
+  client_message_id?: string | null;
   delivery: 'sent' | 'delivered' | 'read';
   created_at: Date;
-  order_seq: number;
+  order_seq: number | string;
   sender_name: string | null;
   sender_email: string | null;
   unread_count?: number;
@@ -269,7 +272,26 @@ type SocialServiceDeps = {
   logger: FastifyBaseLogger;
 };
 
-const MAX_MEDIA_UPLOAD_BYTES = 200 * 1024 * 1024;
+const MAX_MEDIA_UPLOAD_BYTES = env.BINARY_BODY_LIMIT_BYTES;
+const MAX_SHARED_ROOM_MEMBERS = 50;
+const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+const ALLOWED_IMAGE_MIME_TYPES = new Set([
+  'image/jpeg',
+  'image/jpg',
+  'image/png',
+  'image/webp',
+  'image/heic',
+  'image/heif',
+  'image/heic-sequence',
+  'image/heif-sequence'
+]);
+const ALLOWED_VIDEO_MIME_TYPES = new Set([
+  'video/mp4',
+  'video/webm',
+  'video/quicktime',
+  'video/3gpp',
+  'video/3gpp2'
+]);
 
 function normalizeName(displayName: string | null, email: string): string {
   if (displayName && displayName.trim().length > 0) {
@@ -363,7 +385,7 @@ function decodeCursor(raw?: string): CursorInput | null {
       id?: string;
       order?: number;
     };
-    if (!parsed.at || !parsed.id) {
+    if (!parsed.at || !parsed.id || !UUID_PATTERN.test(parsed.id)) {
       return null;
     }
 
@@ -380,6 +402,11 @@ function decodeCursor(raw?: string): CursorInput | null {
   } catch {
     return null;
   }
+}
+
+function normalizeOrderSeq(value: number | string | null | undefined): number | undefined {
+  const parsed = typeof value === 'number' ? value : Number(value);
+  return Number.isSafeInteger(parsed) && parsed >= 0 ? parsed : undefined;
 }
 
 function normalizeLimit(limit: number | undefined, defaultValue: number, max = 100): number {
@@ -409,13 +436,71 @@ function mapMimeToExtension(mimeType: string): string {
   if (lower === 'image/webp') {
     return 'webp';
   }
+  if (lower === 'image/heic' || lower === 'image/heic-sequence') {
+    return 'heic';
+  }
+  if (lower === 'image/heif' || lower === 'image/heif-sequence') {
+    return 'heif';
+  }
   if (lower === 'video/mp4') {
     return 'mp4';
   }
   if (lower === 'video/webm') {
     return 'webm';
   }
+  if (lower === 'video/quicktime') {
+    return 'mov';
+  }
+  if (lower === 'video/3gpp') {
+    return '3gp';
+  }
+  if (lower === 'video/3gpp2') {
+    return '3g2';
+  }
   return 'bin';
+}
+
+function getIsoBmffBrands(bytes: Buffer): string[] {
+  if (bytes.length < 12 || bytes.subarray(4, 8).toString('ascii') !== 'ftyp') {
+    return [];
+  }
+
+  const declaredBoxSize = bytes.readUInt32BE(0);
+  const boxEnd = Math.min(bytes.length, declaredBoxSize >= 16 ? declaredBoxSize : bytes.length, 256);
+  const brands = [bytes.subarray(8, 12).toString('ascii')];
+  for (let offset = 16; offset + 4 <= boxEnd; offset += 4) {
+    brands.push(bytes.subarray(offset, offset + 4).toString('ascii'));
+  }
+  return brands;
+}
+
+function hasExpectedMediaSignature(mimeType: string, bytes: Buffer): boolean {
+  if (mimeType === 'image/jpeg' || mimeType === 'image/jpg') {
+    return bytes.length >= 3 && bytes[0] === 0xff && bytes[1] === 0xd8 && bytes[2] === 0xff;
+  }
+  if (mimeType === 'image/png') {
+    return bytes.length >= 8 && bytes.subarray(0, 8).equals(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]));
+  }
+  if (mimeType === 'image/webp') {
+    return bytes.length >= 12 && bytes.subarray(0, 4).toString('ascii') === 'RIFF' && bytes.subarray(8, 12).toString('ascii') === 'WEBP';
+  }
+  if (['image/heic', 'image/heif', 'image/heic-sequence', 'image/heif-sequence'].includes(mimeType)) {
+    const heifBrands = new Set(['heic', 'heix', 'hevc', 'hevx', 'heim', 'heis', 'hevm', 'hevs', 'mif1', 'msf1']);
+    return getIsoBmffBrands(bytes).some((brand) => heifBrands.has(brand));
+  }
+  if (mimeType === 'video/mp4' || mimeType === 'video/quicktime') {
+    return bytes.length >= 12 && bytes.subarray(4, 8).toString('ascii') === 'ftyp';
+  }
+  if (mimeType === 'video/3gpp') {
+    return getIsoBmffBrands(bytes).some((brand) => /^3g[pges]\d$/i.test(brand));
+  }
+  if (mimeType === 'video/3gpp2') {
+    return getIsoBmffBrands(bytes).some((brand) => /^3g2[a-z0-9]$/i.test(brand));
+  }
+  if (mimeType === 'video/webm') {
+    return bytes.length >= 4 && bytes.subarray(0, 4).equals(Buffer.from([0x1a, 0x45, 0xdf, 0xa3]));
+  }
+  return false;
 }
 
 function normalizeMessagePreview(kind: MessageKind | null, text: string | null): string | undefined {
@@ -475,7 +560,7 @@ function resolveMediaStoragePath(fileUrl: string): string {
   const root = getMediaStorageRoot();
   const absolutePath = resolve(root, relativePath);
   const relativeToRoot = relative(root, absolutePath);
-  if (relativeToRoot.startsWith('..') || relativeToRoot === '') {
+  if (relativeToRoot.startsWith('..') || relativeToRoot === '' || isAbsolute(relativeToRoot)) {
     throw new AppError(400, ErrorCodes.VALIDATION_ERROR, 'Invalid media file path.');
   }
 
@@ -567,7 +652,7 @@ export class SocialService {
       }
     }
 
-    return this.mapProfile(row);
+    return this.getMeProfile(userId);
   }
 
   async updateMyLocation(params: {
@@ -578,11 +663,6 @@ export class SocialService {
     capturedAt?: string;
     source: 'heartbeat' | 'precision_refresh' | 'manual_refresh';
   }): Promise<UserLocationDto> {
-    const settings = await this.getUserLocationSettings(params.userId);
-    if (!settings.sharingEnabled) {
-      throw new AppError(409, ErrorCodes.CONFLICT, 'Location sharing is disabled for this account.');
-    }
-
     if (!Number.isFinite(params.latitude) || !Number.isFinite(params.longitude)) {
       throw new AppError(400, ErrorCodes.VALIDATION_ERROR, 'Latitude and longitude are required.');
     }
@@ -594,50 +674,87 @@ export class SocialService {
     if (Number.isNaN(capturedAt.getTime())) {
       throw new AppError(400, ErrorCodes.VALIDATION_ERROR, 'capturedAt is invalid.');
     }
-
-    const result = await this.db.query<UserLocationLatestRow>(
-      `INSERT INTO user_location_latest (
-         user_id,
-         latitude,
-         longitude,
-         accuracy_m,
-         captured_at,
-         source,
-         created_at,
-         updated_at
-       )
-       VALUES ($1, $2, $3, $4, $5, $6, NOW(), NOW())
-       ON CONFLICT (user_id)
-       DO UPDATE SET
-         latitude = EXCLUDED.latitude,
-         longitude = EXCLUDED.longitude,
-         accuracy_m = EXCLUDED.accuracy_m,
-         captured_at = EXCLUDED.captured_at,
-         source = EXCLUDED.source,
-         updated_at = NOW()
-       RETURNING user_id, latitude, longitude, accuracy_m, captured_at, source`,
-      [
-        params.userId,
-        params.latitude,
-        params.longitude,
-        params.accuracyM ?? null,
-        capturedAt,
-        params.source
-      ]
-    );
-
-    if (params.source === 'precision_refresh' || params.source === 'manual_refresh') {
-      await this.db.query(
-        `UPDATE user_location_precision_requests
-         SET consumed_at = NOW(),
-             updated_at = NOW()
-         WHERE user_id = $1
-           AND consumed_at IS NULL`,
-        [params.userId]
-      );
+    if (capturedAt.getTime() > Date.now() + 5 * 60 * 1000) {
+      throw new AppError(400, ErrorCodes.VALIDATION_ERROR, 'capturedAt cannot be in the future.');
     }
 
-    return this.mapUserLocation(result.rows[0]);
+    const client = await this.db.connect();
+    try {
+      await client.query('BEGIN');
+      const settings = await client.query<{ sharing_enabled: boolean }>(
+        `SELECT sharing_enabled
+         FROM user_location_settings
+         WHERE user_id = $1
+         FOR UPDATE`,
+        [params.userId]
+      );
+      if (!settings.rows[0]?.sharing_enabled) {
+        throw new AppError(409, ErrorCodes.CONFLICT, 'Location sharing is disabled for this account.');
+      }
+
+      const result = await client.query<UserLocationLatestRow>(
+        `INSERT INTO user_location_latest (
+           user_id,
+           latitude,
+           longitude,
+           accuracy_m,
+           captured_at,
+           source,
+           created_at,
+           updated_at
+         )
+         VALUES ($1, $2, $3, $4, $5, $6, NOW(), NOW())
+         ON CONFLICT (user_id)
+         DO UPDATE SET
+           latitude = EXCLUDED.latitude,
+           longitude = EXCLUDED.longitude,
+           accuracy_m = EXCLUDED.accuracy_m,
+           captured_at = EXCLUDED.captured_at,
+           source = EXCLUDED.source,
+           updated_at = NOW()
+         WHERE EXCLUDED.captured_at >= user_location_latest.captured_at
+         RETURNING user_id, latitude, longitude, accuracy_m, captured_at, source`,
+        [
+          params.userId,
+          params.latitude,
+          params.longitude,
+          params.accuracyM ?? null,
+          capturedAt,
+          params.source
+        ]
+      );
+
+      if (params.source === 'precision_refresh' || params.source === 'manual_refresh') {
+        await client.query(
+          `UPDATE user_location_precision_requests
+           SET consumed_at = NOW(),
+               updated_at = NOW()
+           WHERE user_id = $1
+             AND consumed_at IS NULL`,
+          [params.userId]
+        );
+      }
+
+      const location = result.rows[0] ?? (
+        await client.query<UserLocationLatestRow>(
+          `SELECT user_id, latitude, longitude, accuracy_m, captured_at, source
+           FROM user_location_latest
+           WHERE user_id = $1`,
+          [params.userId]
+        )
+      ).rows[0];
+      if (!location) {
+        throw new AppError(500, ErrorCodes.INTERNAL_ERROR, 'Failed to store location.');
+      }
+
+      await client.query('COMMIT');
+      return this.mapUserLocation(location);
+    } catch (error) {
+      await client.query('ROLLBACK');
+      throw error;
+    } finally {
+      client.release();
+    }
   }
 
   async getMyLocationRefreshRequest(userId: string): Promise<UserLocationRefreshRequestDto> {
@@ -768,6 +885,11 @@ export class SocialService {
       throw new AppError(400, ErrorCodes.VALIDATION_ERROR, 'Target user id is required.');
     }
 
+    const locationSettings = await this.getUserLocationSettings(targetUserId);
+    if (!locationSettings.sharingEnabled) {
+      throw new AppError(409, ErrorCodes.CONFLICT, 'Location sharing is disabled for this account.');
+    }
+
     const backendBaseUrl = (params.backendBaseUrl || '').trim();
     const { request, requestToken } = await this.upsertLocationPrecisionRequest({
       userId: targetUserId,
@@ -847,7 +969,7 @@ export class SocialService {
           pushTokenCount,
           pushSentCount,
           websocketDelivered,
-          invalidTokens: result.invalidTokens,
+          invalidTokenCount: result.invalidTokens.length,
           requestTokenHashPrefix
         },
         'Location refresh push send result'
@@ -908,102 +1030,127 @@ export class SocialService {
     if (Number.isNaN(capturedAt.getTime())) {
       throw new AppError(400, ErrorCodes.VALIDATION_ERROR, 'capturedAt is invalid.');
     }
-
-    const requestTokenHash = hashLocationRequestToken(requestToken);
-    const request = await this.db.query<UserLocationPrecisionRequestRow>(
-      `SELECT user_id,
-              requested_by_user_id,
-              requested_by_kind,
-              room_id,
-              requested_at,
-              expires_at,
-              consumed_at,
-              request_token_hash
-       FROM user_location_precision_requests
-       WHERE request_token_hash = $1
-         AND consumed_at IS NULL
-         AND expires_at > NOW()
-       LIMIT 1`,
-      [requestTokenHash]
-    );
-
-    const row = request.rows[0];
-    if (!row) {
-      this.logger.warn(
-        {
-          tag: 'location_refresh.consume.invalid',
-          requestTokenHashPrefix: requestTokenHash.slice(0, 12)
-        },
-        'Location precision consume rejected due to invalid or expired token'
-      );
-      throw new AppError(401, ErrorCodes.AUTH_UNAUTHORIZED, 'Location request token is invalid or expired.');
+    if (capturedAt.getTime() > Date.now() + 5 * 60 * 1000) {
+      throw new AppError(400, ErrorCodes.VALIDATION_ERROR, 'capturedAt cannot be in the future.');
     }
 
-    this.logger.info(
-      {
-        tag: 'location_refresh.consume.start',
-        targetUserId: row.user_id,
-        requestedByUserId: row.requested_by_user_id,
-        roomId: row.room_id,
-        requestTokenHashPrefix: requestTokenHash.slice(0, 12),
-        requestedAt: row.requested_at.toISOString(),
-        expiresAt: row.expires_at.toISOString(),
-        source: params.source || 'precision_refresh'
-      },
-      'Location precision consume started'
-    );
-
-    await this.upsertUserLocationSettings(row.user_id, true);
-
+    const requestTokenHash = hashLocationRequestToken(requestToken);
     const source = params.source === 'manual_refresh' ? 'manual_refresh' : 'precision_refresh';
-    const result = await this.db.query<UserLocationLatestRow>(
-      `INSERT INTO user_location_latest (
-         user_id,
-         latitude,
-         longitude,
-         accuracy_m,
-         captured_at,
-         source,
-         created_at,
-         updated_at
-       )
-       VALUES ($1, $2, $3, $4, $5, $6, NOW(), NOW())
-       ON CONFLICT (user_id)
-       DO UPDATE SET
-         latitude = EXCLUDED.latitude,
-         longitude = EXCLUDED.longitude,
-         accuracy_m = EXCLUDED.accuracy_m,
-         captured_at = EXCLUDED.captured_at,
-         source = EXCLUDED.source,
-         updated_at = NOW()
-       RETURNING user_id, latitude, longitude, accuracy_m, captured_at, source`,
-      [row.user_id, params.latitude, params.longitude, params.accuracyM ?? null, capturedAt, source]
-    );
+    const client = await this.db.connect();
 
-    await this.db.query(
-      `UPDATE user_location_precision_requests
-       SET consumed_at = NOW(),
+    try {
+      await client.query('BEGIN');
+      const candidate = await client.query<{ user_id: string }>(
+        `SELECT user_id
+         FROM user_location_precision_requests
+         WHERE request_token_hash = $1
+           AND consumed_at IS NULL
+           AND expires_at > NOW()
+         LIMIT 1`,
+        [requestTokenHash]
+      );
+      const candidateUserId = candidate.rows[0]?.user_id;
+      if (!candidateUserId) {
+        throw new AppError(401, ErrorCodes.AUTH_UNAUTHORIZED, 'Location request token is invalid or expired.');
+      }
+
+      const settings = await client.query<{ sharing_enabled: boolean }>(
+        `SELECT sharing_enabled
+         FROM user_location_settings
+         WHERE user_id = $1
+         FOR UPDATE`,
+        [candidateUserId]
+      );
+      if (!settings.rows[0]?.sharing_enabled) {
+        throw new AppError(409, ErrorCodes.CONFLICT, 'Location sharing is disabled for this account.');
+      }
+
+      const request = await client.query<UserLocationPrecisionRequestRow>(
+        `UPDATE user_location_precision_requests
+         SET consumed_at = NOW(),
+             updated_at = NOW()
+         WHERE request_token_hash = $1
+           AND consumed_at IS NULL
+           AND expires_at > NOW()
+         RETURNING user_id,
+                   requested_by_user_id,
+                   requested_by_kind,
+                   room_id,
+                   requested_at,
+                   expires_at,
+                   consumed_at,
+                   request_token_hash`,
+        [requestTokenHash]
+      );
+
+      const row = request.rows[0];
+      if (!row) {
+        throw new AppError(401, ErrorCodes.AUTH_UNAUTHORIZED, 'Location request token is invalid or expired.');
+      }
+
+      const upserted = await client.query<UserLocationLatestRow>(
+        `INSERT INTO user_location_latest (
+           user_id,
+           latitude,
+           longitude,
+           accuracy_m,
+           captured_at,
+           source,
+           created_at,
+           updated_at
+         )
+         VALUES ($1, $2, $3, $4, $5, $6, NOW(), NOW())
+         ON CONFLICT (user_id)
+         DO UPDATE SET
+           latitude = EXCLUDED.latitude,
+           longitude = EXCLUDED.longitude,
+           accuracy_m = EXCLUDED.accuracy_m,
+           captured_at = EXCLUDED.captured_at,
+           source = EXCLUDED.source,
            updated_at = NOW()
-       WHERE user_id = $1
-         AND request_token_hash = $2
-         AND consumed_at IS NULL`,
-      [row.user_id, requestTokenHash]
-    );
+         WHERE EXCLUDED.captured_at >= user_location_latest.captured_at
+         RETURNING user_id, latitude, longitude, accuracy_m, captured_at, source`,
+        [row.user_id, params.latitude, params.longitude, params.accuracyM ?? null, capturedAt, source]
+      );
 
-    this.logger.info(
-      {
-        tag: 'location_refresh.consume.success',
-        targetUserId: row.user_id,
-        requestedByUserId: row.requested_by_user_id,
-        roomId: row.room_id,
-        requestTokenHashPrefix: requestTokenHash.slice(0, 12),
-        capturedAt: result.rows[0].captured_at.toISOString(),
-        source
-      },
-      'Location precision consume completed'
-    );
+      const location = upserted.rows[0] ?? (
+        await client.query<UserLocationLatestRow>(
+          `SELECT user_id, latitude, longitude, accuracy_m, captured_at, source
+           FROM user_location_latest
+           WHERE user_id = $1`,
+          [row.user_id]
+        )
+      ).rows[0];
+      if (!location) {
+        throw new AppError(500, ErrorCodes.INTERNAL_ERROR, 'Failed to store refreshed location.');
+      }
 
-    return this.mapUserLocation(result.rows[0]);
+      await client.query('COMMIT');
+      this.logger.info(
+        {
+          tag: 'location_refresh.consume.success',
+          targetUserId: row.user_id,
+          requestedByUserId: row.requested_by_user_id,
+          roomId: row.room_id,
+          requestTokenHashPrefix: requestTokenHash.slice(0, 12),
+          capturedAt: location.captured_at.toISOString(),
+          source
+        },
+        'Location precision consume completed'
+      );
+      return this.mapUserLocation(location);
+    } catch (error) {
+      await client.query('ROLLBACK');
+      if (error instanceof AppError && error.statusCode === 401) {
+        this.logger.warn(
+          { tag: 'location_refresh.consume.invalid', requestTokenHashPrefix: requestTokenHash.slice(0, 12) },
+          'Location precision consume rejected due to invalid or expired token'
+        );
+      }
+      throw error;
+    } finally {
+      client.release();
+    }
   }
 
   async issueAvatarUploadUrl(
@@ -1036,14 +1183,14 @@ export class SocialService {
       throw new AppError(400, ErrorCodes.VALIDATION_ERROR, 'Invalid media size. Allowed range is 1 byte to 200MB.');
     }
 
-    if (kind === 'image' && !mimeType.startsWith('image/')) {
-      throw new AppError(400, ErrorCodes.VALIDATION_ERROR, 'mimeType must be image/* for kind=image.');
+    if (kind === 'image' && !ALLOWED_IMAGE_MIME_TYPES.has(mimeType)) {
+      throw new AppError(400, ErrorCodes.VALIDATION_ERROR, 'Unsupported image mimeType.');
     }
-    if (kind === 'video' && !mimeType.startsWith('video/')) {
-      throw new AppError(400, ErrorCodes.VALIDATION_ERROR, 'mimeType must be video/* for kind=video.');
+    if (kind === 'video' && !ALLOWED_VIDEO_MIME_TYPES.has(mimeType)) {
+      throw new AppError(400, ErrorCodes.VALIDATION_ERROR, 'Unsupported video mimeType.');
     }
-    if (kind === 'avatar' && !mimeType.startsWith('image/')) {
-      throw new AppError(400, ErrorCodes.VALIDATION_ERROR, 'mimeType must be image/* for avatar upload.');
+    if (kind === 'avatar' && !ALLOWED_IMAGE_MIME_TYPES.has(mimeType)) {
+      throw new AppError(400, ErrorCodes.VALIDATION_ERROR, 'Unsupported avatar mimeType.');
     }
 
     const now = new Date();
@@ -1055,11 +1202,46 @@ export class SocialService {
     const fileUrl = buildMediaFileUrl(relativePath);
     const uploadUrl = `${getMediaPublicBaseUrl()}/v1/media/upload?fileUrl=${encodeURIComponent(fileUrl)}`;
 
-    await this.db.query(
-      `INSERT INTO media_assets (owner_user_id, kind, mime_type, size_bytes, file_url, status)
-       VALUES ($1, $2, $3, $4, $5, 'pending')`,
-      [userId, kind, mimeType, size, fileUrl]
-    );
+    const client = await this.db.connect();
+    try {
+      await client.query('BEGIN');
+      await client.query('SELECT pg_advisory_xact_lock(hashtext($1))', [`media:${userId}`]);
+      await client.query(
+        `UPDATE media_assets
+         SET status = 'failed', updated_at = NOW()
+         WHERE owner_user_id = $1
+           AND status = 'pending'
+           AND updated_at < NOW() - INTERVAL '15 minutes'`,
+        [userId]
+      );
+      const usage = await client.query<{ reserved_bytes: string; pending_count: string }>(
+        `SELECT COALESCE(SUM(size_bytes) FILTER (WHERE status IN ('pending', 'completed')), 0)::text AS reserved_bytes,
+                COUNT(*) FILTER (WHERE status = 'pending')::text AS pending_count
+         FROM media_assets
+         WHERE owner_user_id = $1`,
+        [userId]
+      );
+      const reservedBytes = Number(usage.rows[0]?.reserved_bytes ?? 0);
+      const pendingCount = Number(usage.rows[0]?.pending_count ?? 0);
+      if (reservedBytes + size > env.MEDIA_USER_QUOTA_BYTES) {
+        throw new AppError(413, ErrorCodes.VALIDATION_ERROR, 'Media storage quota exceeded.');
+      }
+      if (pendingCount >= env.MEDIA_PENDING_LIMIT) {
+        throw new AppError(429, ErrorCodes.RATE_LIMITED, 'Too many pending media uploads.');
+      }
+
+      await client.query(
+        `INSERT INTO media_assets (owner_user_id, kind, mime_type, size_bytes, file_url, status)
+         VALUES ($1, $2, $3, $4, $5, 'pending')`,
+        [userId, kind, mimeType, size, fileUrl]
+      );
+      await client.query('COMMIT');
+    } catch (error) {
+      await client.query('ROLLBACK');
+      throw error;
+    } finally {
+      client.release();
+    }
 
     return {
       uploadUrl,
@@ -1080,8 +1262,8 @@ export class SocialService {
       throw new AppError(400, ErrorCodes.VALIDATION_ERROR, 'fileUrl is required.');
     }
 
-    const pending = await this.db.query<{ size_bytes: number }>(
-      `SELECT size_bytes
+    const pending = await this.db.query<{ size_bytes: number; mime_type: string }>(
+      `SELECT size_bytes, mime_type
        FROM media_assets
        WHERE owner_user_id = $1
          AND file_url = $2
@@ -1099,8 +1281,11 @@ export class SocialService {
       throw new AppError(400, ErrorCodes.VALIDATION_ERROR, 'Media payload is empty.');
     }
 
-    if (params.bytes.length > Number(row.size_bytes)) {
-      throw new AppError(400, ErrorCodes.VALIDATION_ERROR, 'Uploaded media exceeds the declared size.');
+    if (params.bytes.length !== Number(row.size_bytes)) {
+      throw new AppError(400, ErrorCodes.VALIDATION_ERROR, 'Uploaded media size does not match the declared size.');
+    }
+    if (!hasExpectedMediaSignature(row.mime_type, params.bytes)) {
+      throw new AppError(400, ErrorCodes.VALIDATION_ERROR, 'Uploaded media signature does not match its mimeType.');
     }
 
     const storagePath = resolveMediaStoragePath(fileUrl);
@@ -1170,20 +1355,28 @@ export class SocialService {
       routePath = normalizedFileUrl.startsWith('/') ? normalizedFileUrl : '';
     }
 
-    const result = await this.db.query<MediaAssetRow>(
+    const exact = await this.db.query<MediaAssetRow>(
       `SELECT file_url, mime_type, size_bytes
        FROM media_assets
        WHERE status = 'completed'
-         AND (
-           file_url = $1
-           OR ($2 <> '' AND file_url LIKE '%' || $2)
-         )
-       ORDER BY CASE WHEN file_url = $1 THEN 0 ELSE 1 END, updated_at DESC
+         AND file_url = $1
        LIMIT 1`,
-      [normalizedFileUrl, routePath]
+      [normalizedFileUrl]
     );
 
-    const row = result.rows[0];
+    let row = exact.rows[0];
+    if (!row && routePath) {
+      const legacy = await this.db.query<MediaAssetRow>(
+        `SELECT file_url, mime_type, size_bytes
+         FROM media_assets
+         WHERE status = 'completed'
+           AND file_url LIKE '%' || $1
+         ORDER BY updated_at DESC
+         LIMIT 1`,
+        [routePath]
+      );
+      row = legacy.rows[0];
+    }
     if (!row) {
       throw new AppError(404, ErrorCodes.RESOURCE_NOT_FOUND, 'Media asset not found.');
     }
@@ -1225,7 +1418,7 @@ export class SocialService {
     }>;
     nextCursor?: string;
   }> {
-    const limit = normalizeLimit(params.limit, 30, 100);
+    const limit = normalizeLimit(params.limit, 100, 100);
     const cursor = decodeCursor(params.cursor);
 
     const result = await this.db.query<FriendRow>(
@@ -1372,7 +1565,6 @@ export class SocialService {
     }
 
     const limit = normalizeLimit(params.limit, 20, 50);
-    const like = `%${q}%`;
 
     const result = await this.db.query<FriendSearchRow>(
       `SELECT u.id,
@@ -1402,15 +1594,9 @@ export class SocialService {
               ) AS incoming_pending
        FROM users u
        WHERE u.id <> $1
-         AND (
-           lower(u.email) LIKE $2 OR
-           lower(COALESCE(u.display_name, '')) LIKE $2
-         )
-       ORDER BY
-         CASE WHEN lower(u.email) = $3 THEN 0 ELSE 1 END,
-         u.created_at DESC
-       LIMIT $4`,
-      [params.userId, like, q, limit]
+         AND lower(u.email) = $2
+       LIMIT $3`,
+      [params.userId, q, limit]
     );
 
     return {
@@ -1432,12 +1618,22 @@ export class SocialService {
       id: string;
       peerUserId: string;
       peerName: string;
+      peerAvatarUri?: string;
+      requesterUserId: string;
+      requesterName: string;
+      requesterAvatarUri?: string;
+      status: 'pending';
       createdAt: string;
     }>;
     outgoing: Array<{
       id: string;
       peerUserId: string;
       peerName: string;
+      peerAvatarUri?: string;
+      targetUserId: string;
+      targetName: string;
+      targetAvatarUri?: string;
+      status: 'pending';
       createdAt: string;
     }>;
   }> {
@@ -1448,7 +1644,8 @@ export class SocialService {
               fr.status,
               fr.created_at,
               u.display_name AS peer_name,
-              u.email AS peer_email
+              u.email AS peer_email,
+              u.avatar_url AS peer_avatar_url
        FROM friend_requests fr
        INNER JOIN users u ON u.id = fr.requester_id
        WHERE fr.target_id = $1
@@ -1464,7 +1661,8 @@ export class SocialService {
               fr.status,
               fr.created_at,
               u.display_name AS peer_name,
-              u.email AS peer_email
+              u.email AS peer_email,
+              u.avatar_url AS peer_avatar_url
        FROM friend_requests fr
        INNER JOIN users u ON u.id = fr.target_id
        WHERE fr.requester_id = $1
@@ -1474,18 +1672,34 @@ export class SocialService {
     );
 
     return {
-      incoming: incomingResult.rows.map((row) => ({
-        id: row.id,
-        peerUserId: row.requester_id,
-        peerName: normalizeName(row.peer_name, row.peer_email),
-        createdAt: row.created_at.toISOString()
-      })),
-      outgoing: outgoingResult.rows.map((row) => ({
-        id: row.id,
-        peerUserId: row.target_id,
-        peerName: normalizeName(row.peer_name, row.peer_email),
-        createdAt: row.created_at.toISOString()
-      }))
+      incoming: incomingResult.rows.map((row) => {
+        const peerName = normalizeName(row.peer_name, row.peer_email);
+        return {
+          id: row.id,
+          peerUserId: row.requester_id,
+          peerName,
+          ...(row.peer_avatar_url ? { peerAvatarUri: row.peer_avatar_url } : {}),
+          requesterUserId: row.requester_id,
+          requesterName: peerName,
+          ...(row.peer_avatar_url ? { requesterAvatarUri: row.peer_avatar_url } : {}),
+          status: 'pending' as const,
+          createdAt: row.created_at.toISOString()
+        };
+      }),
+      outgoing: outgoingResult.rows.map((row) => {
+        const peerName = normalizeName(row.peer_name, row.peer_email);
+        return {
+          id: row.id,
+          peerUserId: row.target_id,
+          peerName,
+          ...(row.peer_avatar_url ? { peerAvatarUri: row.peer_avatar_url } : {}),
+          targetUserId: row.target_id,
+          targetName: peerName,
+          ...(row.peer_avatar_url ? { targetAvatarUri: row.peer_avatar_url } : {}),
+          status: 'pending' as const,
+          createdAt: row.created_at.toISOString()
+        };
+      })
     };
   }
 
@@ -1534,12 +1748,20 @@ export class SocialService {
       throw new AppError(409, ErrorCodes.CONFLICT, 'Friend request is already pending.');
     }
 
-    const inserted = await this.db.query<{ id: string; created_at: Date }>(
-      `INSERT INTO friend_requests (requester_id, target_id, status, created_at, updated_at)
-       VALUES ($1, $2, 'pending', NOW(), NOW())
-       RETURNING id, created_at`,
-      [userId, targetUserId]
-    );
+    let inserted;
+    try {
+      inserted = await this.db.query<{ id: string; created_at: Date }>(
+        `INSERT INTO friend_requests (requester_id, target_id, status, created_at, updated_at)
+         VALUES ($1, $2, 'pending', NOW(), NOW())
+         RETURNING id, created_at`,
+        [userId, targetUserId]
+      );
+    } catch (error) {
+      if ((error as { code?: string }).code === '23505') {
+        throw new AppError(409, ErrorCodes.CONFLICT, 'A friend request is already pending.');
+      }
+      throw error;
+    }
 
     const realtimePayload = {
       event: 'friend.updated',
@@ -1794,24 +2016,55 @@ export class SocialService {
   }
 
   async removeFriend(userId: string, friendUserId: string): Promise<{ removed: boolean }> {
-    await this.db.query(
-      `DELETE FROM friendships
-       WHERE (user_id = $1 AND friend_user_id = $2)
-          OR (user_id = $2 AND friend_user_id = $1)`,
-      [userId, friendUserId]
-    );
+    const client = await this.db.connect();
+    try {
+      await client.query('BEGIN');
+      await client.query(
+        `DELETE FROM friendships
+         WHERE (user_id = $1 AND friend_user_id = $2)
+            OR (user_id = $2 AND friend_user_id = $1)`,
+        [userId, friendUserId]
+      );
 
-    await this.db.query(
-      `UPDATE friend_requests
-       SET status = 'canceled',
-           updated_at = NOW()
-       WHERE status = 'pending'
-         AND (
-           (requester_id = $1 AND target_id = $2) OR
-           (requester_id = $2 AND target_id = $1)
-         )`,
-      [userId, friendUserId]
-    );
+      await client.query(
+        `UPDATE friend_requests
+         SET status = 'canceled',
+             updated_at = NOW()
+         WHERE status = 'pending'
+           AND (
+             (requester_id = $1 AND target_id = $2) OR
+             (requester_id = $2 AND target_id = $1)
+           )`,
+        [userId, friendUserId]
+      );
+
+      const directRooms = await client.query<{ id: string }>(
+        `SELECT r.id
+         FROM rooms r
+         WHERE r.type = 'direct'
+           AND r.deleted_at IS NULL
+           AND EXISTS (
+             SELECT 1 FROM room_members rm
+             WHERE rm.room_id = r.id AND rm.user_id = $1 AND rm.left_at IS NULL
+           )
+           AND EXISTS (
+             SELECT 1 FROM room_members rm
+             WHERE rm.room_id = r.id AND rm.user_id = $2 AND rm.left_at IS NULL
+           )
+         FOR UPDATE`,
+        [userId, friendUserId]
+      );
+      for (const room of directRooms.rows) {
+        await this.closeDirectRoom(client, room.id);
+      }
+
+      await client.query('COMMIT');
+    } catch (error) {
+      await client.query('ROLLBACK');
+      throw error;
+    } finally {
+      client.release();
+    }
 
     this.emitToUsers([userId, friendUserId], {
       event: 'friend.updated',
@@ -1832,7 +2085,7 @@ export class SocialService {
     limit?: number;
     cursor?: string;
   }): Promise<{ items: RoomDto[]; nextCursor?: string }> {
-    const limit = normalizeLimit(params.limit, 30, 100);
+    const limit = normalizeLimit(params.limit, 100, 100);
     const cursor = decodeCursor(params.cursor);
 
     const result = await this.db.query<RoomListRow>(
@@ -1851,20 +2104,10 @@ export class SocialService {
                   AND rm.kind <> 'system'
                   AND rm.sender_id IS DISTINCT FROM $1
                   AND (
-                    (
-                      rus.last_read_message_id IS NULL
-                      AND rm.created_at > COALESCE(rus.last_read_at, to_timestamp(0))
-                    )
+                    (lrm.order_seq IS NOT NULL AND rm.order_seq > lrm.order_seq)
                     OR (
-                      rus.last_read_message_id IS NOT NULL
-                      AND (
-                        rm.created_at > COALESCE(lrm.created_at, rus.last_read_at, to_timestamp(0))
-                        OR (
-                          lrm.created_at IS NOT NULL
-                          AND rm.created_at = lrm.created_at
-                          AND rm.order_seq > lrm.order_seq
-                        )
-                      )
+                      lrm.order_seq IS NULL
+                      AND rm.created_at > COALESCE(rus.last_read_at, to_timestamp(0))
                     )
                   )
               ) AS unread_count,
@@ -1879,7 +2122,7 @@ export class SocialService {
          SELECT kind, text, media_url
          FROM room_messages m
          WHERE m.room_id = r.id
-          ORDER BY m.created_at DESC, m.order_seq DESC
+          ORDER BY m.order_seq DESC
          LIMIT 1
        ) lm ON TRUE
        WHERE mem.user_id = $1
@@ -2090,6 +2333,7 @@ export class SocialService {
     if (await this.isActiveRoomMember(params.roomId, targetUserId)) {
       throw new AppError(409, ErrorCodes.CONFLICT, 'Target user is already in this room.');
     }
+    await this.assertSharedRoomCapacity(params.roomId, targetUserId);
 
     const friendIds = new Set(await this.getFriendUserIds(params.userId));
     if (!friendIds.has(targetUserId)) {
@@ -2201,6 +2445,7 @@ export class SocialService {
       const room = await this.getSharedRoomRow(invitation.room_id, client);
       roomId = room.id;
       inviterUserId = invitation.inviter_user_id;
+      await this.assertSharedRoomCapacity(roomId, params.userId, client, true);
 
       await client.query(
         `UPDATE family_room_invitations
@@ -3055,6 +3300,7 @@ export class SocialService {
               m.kind,
               m.text,
               m.media_url,
+              m.client_message_id,
               m.delivery,
               m.created_at,
               m.order_seq,
@@ -3112,31 +3358,39 @@ export class SocialService {
        ) receipts ON TRUE
        WHERE m.room_id = $1
          AND (
-           $2::timestamptz IS NULL OR
-           m.created_at < $2 OR
-            (
-              m.created_at = $2
-              AND (
-                ($3::bigint IS NOT NULL AND m.order_seq < $3::bigint)
-                OR ($3::bigint IS NULL AND m.id < $4::uuid)
-              )
-            )
+           ($3::bigint IS NOT NULL AND m.order_seq < $3::bigint)
+           OR (
+             $3::bigint IS NULL
+             AND (
+               $2::timestamptz IS NULL
+               OR m.created_at < $2
+               OR (m.created_at = $2 AND m.id < $4::uuid)
+             )
+           )
           )
-        ORDER BY m.created_at DESC, m.order_seq DESC
+        ORDER BY m.order_seq DESC
         LIMIT $5`,
       [params.roomId, cursor?.at ?? null, cursor?.order ?? null, cursor?.id ?? null, limit + 1]
     );
 
     const hasMore = result.rows.length > limit;
     const rows = hasMore ? result.rows.slice(0, limit) : result.rows;
-    const chronological = rows.reverse();
+    const cursorRow = rows[rows.length - 1];
+    const chronological = [...rows].reverse();
 
     const items = chronological.map((row) => this.mapMessageDto(row));
-    const last = rows[rows.length - 1];
 
     return {
       items,
-      ...(hasMore && last ? { nextCursor: encodeCursor({ at: last.created_at, id: last.id, order: last.order_seq }) } : {})
+      ...(hasMore && cursorRow
+        ? {
+            nextCursor: encodeCursor({
+              at: cursorRow.created_at,
+              id: cursorRow.id,
+              order: normalizeOrderSeq(cursorRow.order_seq)
+            })
+          }
+        : {})
     };
   }
 
@@ -3148,6 +3402,10 @@ export class SocialService {
     uri?: string;
     clientMessageId?: string;
   }): Promise<RoomMessageDto> {
+    if (!UUID_PATTERN.test(params.roomId)) {
+      throw new AppError(400, ErrorCodes.VALIDATION_ERROR, 'roomId must be a UUID.');
+    }
+
     const room = await this.assertRoomMembership(params.roomId, params.userId);
     const memberUserIds = await this.getActiveRoomMemberIds(params.roomId);
 
@@ -3160,28 +3418,89 @@ export class SocialService {
     }
 
     const kind = params.kind;
-    if (!['text', 'image', 'video', 'system'].includes(kind)) {
+    if (!['text', 'image', 'video'].includes(kind)) {
       throw new AppError(400, ErrorCodes.VALIDATION_ERROR, 'Unsupported message kind.');
     }
 
-    if ((kind === 'text' || kind === 'system') && !(params.text && params.text.trim().length > 0)) {
-      throw new AppError(400, ErrorCodes.VALIDATION_ERROR, 'Text is required for text/system message.');
+    const text = params.text?.trim();
+    const uri = params.uri?.trim();
+    const clientMessageId = params.clientMessageId?.trim() || undefined;
+
+    if (kind === 'text' && !text) {
+      throw new AppError(400, ErrorCodes.VALIDATION_ERROR, 'Text is required for text message.');
+    }
+    if (text && text.length > 5000) {
+      throw new AppError(400, ErrorCodes.VALIDATION_ERROR, 'Message text must be 5,000 characters or fewer.');
     }
 
-    if ((kind === 'image' || kind === 'video') && !(params.uri && params.uri.trim().length > 0)) {
+    if ((kind === 'image' || kind === 'video') && !uri) {
       throw new AppError(400, ErrorCodes.VALIDATION_ERROR, 'uri is required for image/video message.');
     }
+    if (uri && uri.length > 2048) {
+      throw new AppError(400, ErrorCodes.VALIDATION_ERROR, 'Message uri must be 2,048 characters or fewer.');
+    }
+    if (clientMessageId && clientMessageId.length > 128) {
+      throw new AppError(400, ErrorCodes.VALIDATION_ERROR, 'clientMessageId must be 128 characters or fewer.');
+    }
 
-    if (params.clientMessageId) {
-      const existing = await this.db.query<RoomMessageRow>(
+    if ((kind === 'image' || kind === 'video') && uri) {
+      const media = await this.db.query<{ exists: boolean }>(
+        `SELECT EXISTS(
+           SELECT 1
+           FROM media_assets
+           WHERE owner_user_id = $1
+             AND file_url = $2
+             AND kind = $3
+             AND status = 'completed'
+         ) AS exists`,
+        [params.userId, uri, kind]
+      );
+      if (!(media.rows[0]?.exists ?? false)) {
+        throw new AppError(400, ErrorCodes.VALIDATION_ERROR, 'Message media must be a completed owned upload.');
+      }
+    }
+
+    const insertResult = await this.db.query<RoomMessageRow>(
+      `INSERT INTO room_messages (room_id, sender_id, kind, text, media_url, client_message_id, delivery, created_at)
+       VALUES ($1, $2, $3, $4, $5, $6, 'sent', NOW())
+       ON CONFLICT (room_id, sender_id, client_message_id)
+       WHERE client_message_id IS NOT NULL
+       DO NOTHING
+       RETURNING id,
+                 room_id,
+                 sender_id,
+                 kind,
+                 text,
+                 media_url,
+                 client_message_id,
+                 delivery,
+                 created_at,
+                 order_seq,
+                 NULL::text AS sender_name,
+                 NULL::text AS sender_email`,
+      [
+        params.roomId,
+        params.userId,
+        kind,
+        kind === 'text' ? text ?? null : null,
+        kind === 'image' || kind === 'video' ? uri ?? null : null,
+        clientMessageId ?? null
+      ]
+    );
+
+    let inserted = insertResult.rows[0];
+    if (!inserted && clientMessageId) {
+      const concurrent = await this.db.query<RoomMessageRow>(
         `SELECT m.id,
                 m.room_id,
                 m.sender_id,
                 m.kind,
                 m.text,
                 m.media_url,
+                m.client_message_id,
                 m.delivery,
                 m.created_at,
+                m.order_seq,
                 u.display_name AS sender_name,
                 u.email AS sender_email
          FROM room_messages m
@@ -3190,38 +3509,16 @@ export class SocialService {
            AND m.sender_id = $2
            AND m.client_message_id = $3
          LIMIT 1`,
-        [params.roomId, params.userId, params.clientMessageId]
+        [params.roomId, params.userId, clientMessageId]
       );
-
-      if (existing.rows[0]) {
-        return this.mapMessageDto(existing.rows[0]);
+      inserted = concurrent.rows[0];
+      if (inserted) {
+        return this.mapMessageDto(inserted);
       }
     }
-
-    const insertResult = await this.db.query<RoomMessageRow>(
-      `INSERT INTO room_messages (room_id, sender_id, kind, text, media_url, client_message_id, delivery, created_at)
-       VALUES ($1, $2, $3, $4, $5, $6, 'sent', NOW())
-       RETURNING id,
-                 room_id,
-                 sender_id,
-                 kind,
-                 text,
-                 media_url,
-                 delivery,
-                 created_at,
-                 NULL::text AS sender_name,
-                 NULL::text AS sender_email`,
-      [
-        params.roomId,
-        params.userId,
-        kind,
-        kind === 'text' || kind === 'system' ? params.text?.trim() ?? null : null,
-        kind === 'image' || kind === 'video' ? params.uri?.trim() ?? null : null,
-        params.clientMessageId ?? null
-      ]
-    );
-
-    const inserted = insertResult.rows[0];
+    if (!inserted) {
+      throw new AppError(500, ErrorCodes.INTERNAL_ERROR, 'Failed to insert message.');
+    }
 
     await this.db.query(
       `UPDATE rooms
@@ -3235,10 +3532,40 @@ export class SocialService {
        VALUES ($1, $2, FALSE, FALSE, $3, $4, NOW(), NOW())
        ON CONFLICT (room_id, user_id)
        DO UPDATE SET
-         last_read_message_id = EXCLUDED.last_read_message_id,
-         last_read_at = EXCLUDED.last_read_at,
+         last_read_message_id = CASE
+           WHEN COALESCE(
+             $5::bigint >= (
+               SELECT order_seq
+               FROM room_messages
+               WHERE id = room_user_settings.last_read_message_id
+                 AND room_id = $1
+             ),
+             EXCLUDED.last_read_at > COALESCE(
+               room_user_settings.last_read_at,
+               '-infinity'::timestamptz
+             )
+           )
+           THEN EXCLUDED.last_read_message_id
+           ELSE room_user_settings.last_read_message_id
+         END,
+         last_read_at = CASE
+           WHEN COALESCE(
+             $5::bigint >= (
+               SELECT order_seq
+               FROM room_messages
+               WHERE id = room_user_settings.last_read_message_id
+                 AND room_id = $1
+             ),
+             EXCLUDED.last_read_at > COALESCE(
+               room_user_settings.last_read_at,
+               '-infinity'::timestamptz
+             )
+           )
+           THEN EXCLUDED.last_read_at
+           ELSE room_user_settings.last_read_at
+         END,
          updated_at = NOW()`,
-      [params.roomId, params.userId, inserted.id, inserted.created_at]
+      [params.roomId, params.userId, inserted.id, inserted.created_at, inserted.order_seq]
     );
 
     const mappedInserted = await this.fetchMessageById(inserted.id);
@@ -3330,10 +3657,11 @@ export class SocialService {
 
     let readAt = new Date();
     let lastReadMessageId = params.lastReadMessageId;
+    let readOrderSeq: number | string | null = null;
 
     if (params.lastReadMessageId) {
-      const messageResult = await this.db.query<{ id: string; created_at: Date }>(
-        `SELECT id, created_at
+      const messageResult = await this.db.query<{ id: string; created_at: Date; order_seq: number | string }>(
+        `SELECT id, created_at, order_seq
          FROM room_messages
          WHERE id = $1
            AND room_id = $2
@@ -3348,12 +3676,13 @@ export class SocialService {
 
       readAt = row.created_at;
       lastReadMessageId = row.id;
+      readOrderSeq = row.order_seq;
     } else {
-      const latest = await this.db.query<{ id: string; created_at: Date }>(
-        `SELECT id, created_at
+      const latest = await this.db.query<{ id: string; created_at: Date; order_seq: number | string }>(
+        `SELECT id, created_at, order_seq
          FROM room_messages
          WHERE room_id = $1
-         ORDER BY created_at DESC, order_seq DESC
+         ORDER BY order_seq DESC
          LIMIT 1`,
          [params.roomId]
        );
@@ -3361,19 +3690,59 @@ export class SocialService {
       if (latest.rows[0]) {
         readAt = latest.rows[0].created_at;
         lastReadMessageId = latest.rows[0].id;
+        readOrderSeq = latest.rows[0].order_seq;
       }
     }
 
-    await this.db.query(
+    const savedRead = await this.db.query<{ last_read_message_id: string | null; last_read_at: Date | null }>(
       `INSERT INTO room_user_settings (room_id, user_id, favorite, muted, last_read_message_id, last_read_at, created_at, updated_at)
        VALUES ($1, $2, FALSE, FALSE, $3, $4, NOW(), NOW())
        ON CONFLICT (room_id, user_id)
        DO UPDATE SET
-         last_read_message_id = EXCLUDED.last_read_message_id,
-         last_read_at = EXCLUDED.last_read_at,
-         updated_at = NOW()`,
-      [params.roomId, params.userId, lastReadMessageId ?? null, readAt]
+         last_read_message_id = CASE
+           WHEN $5::bigint IS NOT NULL
+             AND COALESCE(
+               $5::bigint >= (
+                 SELECT order_seq
+                 FROM room_messages
+                 WHERE id = room_user_settings.last_read_message_id
+                   AND room_id = $1
+               ),
+               EXCLUDED.last_read_at > COALESCE(
+                 room_user_settings.last_read_at,
+                 '-infinity'::timestamptz
+               )
+             )
+           THEN EXCLUDED.last_read_message_id
+           ELSE room_user_settings.last_read_message_id
+         END,
+         last_read_at = CASE
+           WHEN $5::bigint IS NOT NULL
+             AND COALESCE(
+               $5::bigint >= (
+                 SELECT order_seq
+                 FROM room_messages
+                 WHERE id = room_user_settings.last_read_message_id
+                   AND room_id = $1
+               ),
+               EXCLUDED.last_read_at > COALESCE(
+                 room_user_settings.last_read_at,
+                 '-infinity'::timestamptz
+               )
+             )
+           THEN EXCLUDED.last_read_at
+           ELSE room_user_settings.last_read_at
+         END,
+         updated_at = NOW()
+       RETURNING last_read_message_id, last_read_at`,
+      [params.roomId, params.userId, lastReadMessageId ?? null, readAt, readOrderSeq]
     );
+
+    const saved = savedRead.rows[0];
+    if (saved?.last_read_at) {
+      readAt = saved.last_read_at;
+      lastReadMessageId = saved.last_read_message_id ?? undefined;
+    }
 
     if (lastReadMessageId) {
       await this.db.query(
@@ -3381,9 +3750,9 @@ export class SocialService {
          SET delivery = 'read'
          WHERE room_id = $1
            AND sender_id IS DISTINCT FROM $2
-           AND created_at <= $3
+           AND order_seq <= COALESCE((SELECT order_seq FROM room_messages WHERE id = $3), -1)
            AND delivery <> 'read'`,
-        [params.roomId, params.userId, readAt]
+        [params.roomId, params.userId, lastReadMessageId]
       );
     }
 
@@ -3451,26 +3820,6 @@ export class SocialService {
       [userId, roomId, params.messageId ?? null, reason]
     );
 
-    const parentUsers = await this.db.query<{ id: string }>(
-      `SELECT id
-       FROM users
-       WHERE role = 'parent'`
-    );
-
-    this.emitToUsers(
-      parentUsers.rows.map((row) => row.id),
-      {
-        event: 'report.received',
-        data: {
-          reportId: inserted.rows[0].id,
-          roomId,
-          messageId: params.messageId,
-          reason,
-          createdAt: inserted.rows[0].created_at.toISOString()
-        }
-      }
-    );
-
     return {
       reportId: inserted.rows[0].id,
       status: 'open',
@@ -3499,7 +3848,7 @@ export class SocialService {
     }>;
     nextCursor?: string;
   }> {
-    await this.assertParentRole(params.userId);
+    await this.assertReportModerator(params.userId);
 
     const limit = normalizeLimit(params.limit, 30, 100);
     const cursor = decodeCursor(params.cursor);
@@ -3558,7 +3907,7 @@ export class SocialService {
     reportId: string,
     status: 'reviewed' | 'closed'
   ): Promise<{ id: string; status: 'reviewed' | 'closed'; updatedAt: string }> {
-    await this.assertParentRole(userId);
+    await this.assertReportModerator(userId);
 
     const result = await this.db.query<{ id: string; status: 'reviewed' | 'closed'; updated_at: Date }>(
       `UPDATE reports
@@ -3591,29 +3940,54 @@ export class SocialService {
       throw new AppError(400, ErrorCodes.VALIDATION_ERROR, 'Invalid push token.');
     }
 
-    await this.db.query(
-      `INSERT INTO device_tokens (user_id, platform, push_token, created_at, updated_at)
-       VALUES ($1, $2, $3, NOW(), NOW())
-       ON CONFLICT (push_token)
-       DO UPDATE SET
-         user_id = EXCLUDED.user_id,
-         platform = EXCLUDED.platform,
-         updated_at = NOW()`,
-      [params.userId, params.platform, pushToken]
-    );
-    const tokenCount = await this.db.query<{ count: string }>(
-      `SELECT COUNT(*)::text AS count
-       FROM device_tokens
-       WHERE user_id = $1`,
-      [params.userId]
-    );
+    const client = await this.db.connect();
+    let tokenCount = 0;
+    try {
+      await client.query('BEGIN');
+      await client.query('SELECT pg_advisory_xact_lock(hashtext($1))', [`push-token:${params.userId}`]);
+      await client.query(
+        `INSERT INTO device_tokens (user_id, platform, push_token, created_at, updated_at)
+         VALUES ($1, $2, $3, NOW(), NOW())
+         ON CONFLICT (push_token)
+         DO UPDATE SET
+           user_id = EXCLUDED.user_id,
+           platform = EXCLUDED.platform,
+           updated_at = NOW()`,
+        [params.userId, params.platform, pushToken]
+      );
+      await client.query(
+        `DELETE FROM device_tokens
+         WHERE user_id = $1
+           AND id NOT IN (
+             SELECT id
+             FROM device_tokens
+             WHERE user_id = $1
+             ORDER BY updated_at DESC, id DESC
+             LIMIT 10
+           )`,
+        [params.userId]
+      );
+      const count = await client.query<{ count: string }>(
+        `SELECT COUNT(*)::text AS count
+         FROM device_tokens
+         WHERE user_id = $1`,
+        [params.userId]
+      );
+      tokenCount = Number(count.rows[0]?.count || '0');
+      await client.query('COMMIT');
+    } catch (error) {
+      await client.query('ROLLBACK');
+      throw error;
+    } finally {
+      client.release();
+    }
     this.logger.info(
       {
         tag: 'push_token.registered',
         userId: params.userId,
         platform: params.platform,
-        pushTokenSuffix: pushToken.slice(-12),
-        tokenCount: Number(tokenCount.rows[0]?.count || '0')
+        pushTokenHashPrefix: createHash('sha256').update(pushToken).digest('hex').slice(0, 12),
+        tokenCount
       },
       'Push token registered'
     );
@@ -3626,17 +4000,18 @@ export class SocialService {
   }
 
   async removePushToken(params: { userId: string; pushToken: string }): Promise<{ removed: boolean }> {
+    const pushToken = params.pushToken.trim();
     const result = await this.db.query(
       `DELETE FROM device_tokens
        WHERE user_id = $1
          AND push_token = $2`,
-      [params.userId, params.pushToken]
+      [params.userId, pushToken]
     );
     this.logger.info(
       {
         tag: 'push_token.removed',
         userId: params.userId,
-        pushTokenSuffix: params.pushToken.slice(-12),
+        pushTokenHashPrefix: createHash('sha256').update(pushToken).digest('hex').slice(0, 12),
         removedCount: result.rowCount || 0
       },
       'Push token removed'
@@ -3823,6 +4198,7 @@ export class SocialService {
               m.kind,
               m.text,
               m.media_url,
+              m.client_message_id,
               m.delivery,
               m.created_at,
               m.order_seq,
@@ -3908,20 +4284,10 @@ export class SocialService {
                   AND rm.kind <> 'system'
                   AND rm.sender_id IS DISTINCT FROM $1
                   AND (
-                    (
-                      rus.last_read_message_id IS NULL
-                      AND rm.created_at > COALESCE(rus.last_read_at, to_timestamp(0))
-                    )
+                    (lrm.order_seq IS NOT NULL AND rm.order_seq > lrm.order_seq)
                     OR (
-                      rus.last_read_message_id IS NOT NULL
-                      AND (
-                        rm.created_at > COALESCE(lrm.created_at, rus.last_read_at, to_timestamp(0))
-                        OR (
-                          lrm.created_at IS NOT NULL
-                          AND rm.created_at = lrm.created_at
-                          AND rm.order_seq > lrm.order_seq
-                        )
-                      )
+                      lrm.order_seq IS NULL
+                      AND rm.created_at > COALESCE(rus.last_read_at, to_timestamp(0))
                     )
                   )
               ) AS unread_count,
@@ -3936,7 +4302,7 @@ export class SocialService {
          SELECT kind, text, media_url
          FROM room_messages m
          WHERE m.room_id = r.id
-          ORDER BY m.created_at DESC, m.order_seq DESC
+          ORDER BY m.order_seq DESC
           LIMIT 1
         ) lm ON TRUE
        WHERE mem.user_id = $1
@@ -4007,8 +4373,10 @@ export class SocialService {
       kind: row.kind,
       ...(row.text ? { text: row.text } : {}),
       ...(row.media_url ? { uri: row.media_url } : {}),
+      ...(row.client_message_id ? { clientMessageId: row.client_message_id } : {}),
       at: row.created_at.toISOString(),
       delivery: row.delivery,
+      ...(normalizeOrderSeq(row.order_seq) !== undefined ? { orderSeq: normalizeOrderSeq(row.order_seq) } : {}),
       ...(typeof row.unread_count === 'number' ? { unreadCount: row.unread_count } : {}),
       ...(Array.isArray(row.read_by_names) && row.read_by_names.length > 0 ? { readByNames: row.read_by_names } : {})
     };
@@ -4077,21 +4445,11 @@ export class SocialService {
          AND m.kind <> 'system'
          AND m.sender_id IS DISTINCT FROM $1
          AND (
-           (
-             rus.last_read_message_id IS NULL
+           (lrm.order_seq IS NOT NULL AND m.order_seq > lrm.order_seq)
+           OR (
+             lrm.order_seq IS NULL
              AND m.created_at > COALESCE(rus.last_read_at, to_timestamp(0))
            )
-           OR (
-             rus.last_read_message_id IS NOT NULL
-             AND (
-               m.created_at > COALESCE(lrm.created_at, rus.last_read_at, to_timestamp(0))
-               OR (
-                 lrm.created_at IS NOT NULL
-                 AND m.created_at = lrm.created_at
-                  AND m.order_seq > lrm.order_seq
-                )
-              )
-            )
          )`,
       [userId, roomId]
     );
@@ -4308,6 +4666,49 @@ export class SocialService {
       throw new AppError(404, ErrorCodes.RESOURCE_NOT_FOUND, 'Shared room not found.');
     }
     return row;
+  }
+
+  private async assertSharedRoomCapacity(
+    roomId: string,
+    joiningUserId: string,
+    client?: PoolClient,
+    lockRoom = false
+  ): Promise<void> {
+    const executor = client ?? this.db;
+    if (lockRoom) {
+      if (!client) {
+        throw new Error('A transaction client is required when locking room capacity.');
+      }
+      const locked = await client.query<{ id: string }>(
+        `SELECT id
+         FROM rooms
+         WHERE id = $1
+           AND deleted_at IS NULL
+           AND type IN ('group', 'family')
+         FOR UPDATE`,
+        [roomId]
+      );
+      if (!locked.rows[0]) {
+        throw new AppError(404, ErrorCodes.RESOURCE_NOT_FOUND, 'Shared room not found.');
+      }
+    }
+
+    const result = await executor.query<{ active_count: number; joining_user_active: boolean }>(
+      `SELECT COUNT(*)::integer AS active_count,
+              COALESCE(BOOL_OR(user_id = $2), FALSE) AS joining_user_active
+       FROM room_members
+       WHERE room_id = $1
+         AND left_at IS NULL`,
+      [roomId, joiningUserId]
+    );
+    const state = result.rows[0];
+    if (!state.joining_user_active && state.active_count >= MAX_SHARED_ROOM_MEMBERS) {
+      throw new AppError(
+        409,
+        ErrorCodes.CONFLICT,
+        `This room already has the maximum of ${MAX_SHARED_ROOM_MEMBERS} active members.`
+      );
+    }
   }
 
   private async getPendingRoomInvitation(invitationId: string, client?: PoolClient): Promise<RoomInvitationRow> {
@@ -4669,6 +5070,13 @@ export class SocialService {
         roomType === 'family' ? 'Family room requires at least 2 members.' : 'Group room requires at least 2 members.'
       );
     }
+    if (uniqMemberIds.length > MAX_SHARED_ROOM_MEMBERS) {
+      throw new AppError(
+        400,
+        ErrorCodes.VALIDATION_ERROR,
+        `A shared room supports at most ${MAX_SHARED_ROOM_MEMBERS} members.`
+      );
+    }
 
     const existingUsers = await this.db.query<{ id: string }>(
       `SELECT id
@@ -4681,12 +5089,10 @@ export class SocialService {
       throw new AppError(404, ErrorCodes.RESOURCE_NOT_FOUND, 'One or more users do not exist.');
     }
 
-    if (roomType === 'family') {
-      const friendIds = new Set(await this.getFriendUserIds(userId));
-      const nonFriends = uniqMemberIds.filter((memberId) => memberId !== userId && !friendIds.has(memberId));
-      if (nonFriends.length > 0) {
-        throw new AppError(403, ErrorCodes.FORBIDDEN, 'Family room members must already be friends.');
-      }
+    const friendIds = new Set(await this.getFriendUserIds(userId));
+    const nonFriends = uniqMemberIds.filter((memberId) => memberId !== userId && !friendIds.has(memberId));
+    if (nonFriends.length > 0) {
+      throw new AppError(403, ErrorCodes.FORBIDDEN, 'Shared room members must already be friends.');
     }
 
     const client = await this.db.connect();
@@ -4888,10 +5294,9 @@ export class SocialService {
     return result.rows.map((row) => row.friend_user_id);
   }
 
-  private async assertParentRole(userId: string): Promise<void> {
-    const role = await this.getUserRole(userId);
-    if (role !== 'parent') {
-      throw new AppError(403, ErrorCodes.FORBIDDEN, 'Only parent/admin role can access report queue.');
+  private async assertReportModerator(userId: string): Promise<void> {
+    if (userId !== GUARDIAN_CONSOLE_SUB) {
+      throw new AppError(403, ErrorCodes.FORBIDDEN, 'Only Guardian Console can access report queue.');
     }
   }
 

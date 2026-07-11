@@ -5,6 +5,7 @@ export async function healthRoutes(app: FastifyInstance): Promise<void> {
   app.get(
     '/health',
     {
+      config: { rateLimit: false },
       schema: {
         tags: ['ops'],
         summary: 'Liveness probe endpoint'
@@ -24,6 +25,7 @@ export async function healthRoutes(app: FastifyInstance): Promise<void> {
   app.get(
     '/ready',
     {
+      config: { rateLimit: false },
       schema: {
         tags: ['ops'],
         summary: 'Readiness probe endpoint'
@@ -36,26 +38,20 @@ export async function healthRoutes(app: FastifyInstance): Promise<void> {
         openclaw: false
       };
 
-      try {
-        await app.db.query('SELECT 1');
-        checks.postgres = true;
-      } catch {
-        checks.postgres = false;
-      }
-
-      try {
-        const redisResponse = await app.redis.ping();
-        checks.redis = redisResponse === 'PONG';
-      } catch {
-        checks.redis = false;
-      }
-
-      try {
-        const openclaw = await app.clawBridge.ping();
-        checks.openclaw = openclaw.ok;
-      } catch {
-        checks.openclaw = false;
-      }
+      await Promise.all([
+        app.db.query('SELECT 1').then(
+          () => { checks.postgres = true; },
+          () => { checks.postgres = false; }
+        ),
+        app.redis.ping().then(
+          (response) => { checks.redis = response === 'PONG'; },
+          () => { checks.redis = false; }
+        ),
+        app.clawBridge.ping().then(
+          (result) => { checks.openclaw = result.ok; },
+          () => { checks.openclaw = false; }
+        )
+      ]);
 
       const openClawRequired = env.OPENCLAW_MODE !== 'mock';
       const ready = checks.postgres && checks.redis && (!openClawRequired || checks.openclaw);
@@ -74,6 +70,7 @@ export async function healthRoutes(app: FastifyInstance): Promise<void> {
   app.get(
     '/metrics',
     {
+      config: { rateLimit: false },
       schema: {
         tags: ['ops'],
         summary: 'Basic request/error counters'

@@ -5,6 +5,7 @@ export async function pairingRoutes(app: FastifyInstance): Promise<void> {
     '/code',
     {
       preHandler: app.authenticate,
+      config: { rateLimit: { max: 10, timeWindow: '1 minute' } },
       schema: {
         tags: ['pairing'],
         summary: 'Generate one-time pairing code',
@@ -37,6 +38,7 @@ export async function pairingRoutes(app: FastifyInstance): Promise<void> {
     '/consume',
     {
       preHandler: app.authenticate,
+      config: { rateLimit: { max: 5, timeWindow: '1 minute' } },
       schema: {
         tags: ['pairing'],
         summary: 'Consume one-time pairing code and create relationship',
@@ -44,7 +46,7 @@ export async function pairingRoutes(app: FastifyInstance): Promise<void> {
           type: 'object',
           required: ['code'],
           properties: {
-            code: { type: 'string', minLength: 6, maxLength: 6 }
+            code: { type: 'string', minLength: 10, maxLength: 10 }
           }
         }
       }

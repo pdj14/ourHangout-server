@@ -1,4 +1,10 @@
 import type { FastifyInstance, FastifyRequest } from 'fastify';
+import { ErrorCodes, isAppError } from '../../lib/errors';
+import type { JwtUserPayload } from '../auth/auth.types';
+import { isGuardianConsoleTokenPayload } from '../guardian/guardian.auth';
+
+const MAX_MESSAGES_PER_WINDOW = 100;
+const MESSAGE_WINDOW_MS = 10_000;
 
 function extractBearerToken(request: FastifyRequest): string | undefined {
   const header = request.headers.authorization;
@@ -31,7 +37,10 @@ export async function websocketRoutes(app: FastifyInstance): Promise<void> {
     let userId: string;
 
     try {
-      const payload = app.jwt.verify<{ sub: string }>(token);
+      const payload = app.jwt.verify<JwtUserPayload>(token);
+      if (isGuardianConsoleTokenPayload(payload) || !payload.sub) {
+        throw new Error('Invalid app user token');
+      }
       userId = payload.sub;
     } catch {
       socket.close(1008, 'Unauthorized');
@@ -39,10 +48,13 @@ export async function websocketRoutes(app: FastifyInstance): Promise<void> {
     }
 
     app.connectionManager.register(userId, socket);
+    let messageWindowStartedAt = Date.now();
+    let messageCount = 0;
 
     socket.send(
       JSON.stringify({
         type: 'ws.connected',
+        event: 'ws.connected',
         data: {
           userId,
           connectedAt: new Date().toISOString()
@@ -52,6 +64,17 @@ export async function websocketRoutes(app: FastifyInstance): Promise<void> {
 
     socket.on('message', async (rawData: Buffer) => {
       try {
+        const now = Date.now();
+        if (now - messageWindowStartedAt >= MESSAGE_WINDOW_MS) {
+          messageWindowStartedAt = now;
+          messageCount = 0;
+        }
+        messageCount += 1;
+        if (messageCount > MAX_MESSAGES_PER_WINDOW) {
+          socket.close(1008, 'Message rate limit exceeded');
+          return;
+        }
+
         const payload = JSON.parse(rawData.toString()) as {
           type?: string;
           messageId?: string;
@@ -130,7 +153,12 @@ export async function websocketRoutes(app: FastifyInstance): Promise<void> {
           return;
         }
       } catch (error) {
-        app.log.warn({ error, userId }, 'Failed to process websocket message payload');
+        const code = isAppError(error) ? error.code : ErrorCodes.INTERNAL_ERROR;
+        const message = isAppError(error) ? error.message : 'Failed to process WebSocket message.';
+        if (socket.readyState === socket.OPEN) {
+          socket.send(JSON.stringify({ event: 'error', data: { code, message } }));
+        }
+        app.log.warn({ error, userId, code }, 'Failed to process websocket message payload');
       }
     });
 

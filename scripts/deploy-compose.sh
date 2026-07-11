@@ -54,7 +54,7 @@ ensure_clean_worktree() {
     return
   fi
 
-  if ! git diff --quiet || ! git diff --cached --quiet; then
+  if [ -n "$(git_cmd status --porcelain)" ]; then
     fail "Working tree has uncommitted changes. Commit/stash them first or rerun with ALLOW_DIRTY=1."
   fi
 }
@@ -83,14 +83,45 @@ mkdir -p "$REPO_DIR/logs" "$REPO_DIR/storage/media" "$REPO_DIR/storage/app-updat
 log "Starting postgres and redis."
 compose up -d postgres redis
 
-log "Building migrate and api images."
-compose build migrate api
+log "Waiting for postgres readiness."
+attempt=0
+until compose exec -T postgres sh -c 'pg_isready -U "$POSTGRES_USER" -d "$POSTGRES_DB"' >/dev/null 2>&1; do
+  attempt=$((attempt + 1))
+  if [ "$attempt" -ge 30 ]; then
+    fail "Postgres did not become ready within 60 seconds."
+  fi
+  sleep 2
+done
+
+log "Building api image."
+compose build api
+
+log "Checking migration data preconditions before stopping api."
+compose run --rm --no-deps api node dist/scripts/migrationPreflight.js
+
+log "Stopping api before the schema migration."
+compose stop api
 
 log "Running migrations."
-compose run --rm migrate
+if ! compose run --rm --no-deps api node dist/scripts/migrate.js; then
+  log "Migration failed; restarting the previous api container after transaction rollback."
+  compose start api || true
+  fail "Migration failed. Inspect the migration logs and preflight duplicate-data queries."
+fi
 
 log "Recreating api container."
 compose up -d --no-deps --force-recreate api
+
+log "Waiting for api health."
+attempt=0
+until compose exec -T api node -e "fetch('http://127.0.0.1:3000/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))" >/dev/null 2>&1; do
+  attempt=$((attempt + 1))
+  if [ "$attempt" -ge 60 ]; then
+    compose logs --tail=100 api >&2 || true
+    fail "API did not become healthy within 120 seconds."
+  fi
+  sleep 2
+done
 
 log "Current container status:"
 compose ps

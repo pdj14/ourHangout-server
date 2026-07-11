@@ -1,6 +1,7 @@
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import { AppError, ErrorCodes, isAppError } from '../lib/errors';
 import { isGuardianConsoleTokenPayload } from '../modules/guardian/guardian.auth';
+import { env } from '../config/env';
 
 function sendError(
   reply: FastifyReply,
@@ -19,11 +20,16 @@ function sendError(
   });
 }
 
+function sanitizeRequestUrl(url: string): string {
+  return url.split('?', 1)[0];
+}
+
 export function registerErrorHandlers(app: FastifyInstance): void {
   app.setErrorHandler((error, request: FastifyRequest, reply: FastifyReply) => {
-    request.log.error({ error }, 'Request failed');
-
     if (isAppError(error)) {
+      if (error.statusCode >= 500) {
+        request.log.error({ error }, 'Request failed');
+      }
       sendError(reply, error.statusCode, error.code, error.message, error.details);
       return;
     }
@@ -49,11 +55,17 @@ export function registerErrorHandlers(app: FastifyInstance): void {
       return;
     }
 
+    request.log.error({ error }, 'Request failed');
     sendError(reply, 500, ErrorCodes.INTERNAL_ERROR, 'Internal server error.');
   });
 
   app.setNotFoundHandler((request, reply) => {
-    sendError(reply, 404, ErrorCodes.RESOURCE_NOT_FOUND, `Route not found: ${request.method} ${request.url}`);
+    sendError(
+      reply,
+      404,
+      ErrorCodes.RESOURCE_NOT_FOUND,
+      `Route not found: ${request.method} ${sanitizeRequestUrl(request.url)}`
+    );
   });
 
   app.decorate('authenticate', async (request: FastifyRequest) => {
@@ -62,9 +74,17 @@ export function registerErrorHandlers(app: FastifyInstance): void {
     } catch {
       throw new AppError(401, ErrorCodes.AUTH_UNAUTHORIZED, 'Authentication required.');
     }
+
+    if (isGuardianConsoleTokenPayload(request.user)) {
+      throw new AppError(403, ErrorCodes.FORBIDDEN, 'Guardian Console tokens cannot access app user routes.');
+    }
   });
 
   app.decorate('authenticateGuardian', async (request: FastifyRequest) => {
+    if (!env.GUARDIAN_CONSOLE_ENABLED) {
+      throw new AppError(503, ErrorCodes.FORBIDDEN, 'Guardian Console is disabled.');
+    }
+
     try {
       await request.jwtVerify();
     } catch {

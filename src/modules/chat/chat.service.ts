@@ -69,6 +69,20 @@ export class ChatService {
     const pairKey = `${userAId}:${userBId}`;
 
     const hasBotParticipant = await this.hasActiveBotParticipant(userAId, userBId);
+    if (!hasBotParticipant) {
+      const friendship = await this.db.query<{ exists: boolean }>(
+        `SELECT EXISTS(
+           SELECT 1
+           FROM friendships
+           WHERE user_id = $1
+             AND friend_user_id = $2
+         ) AS exists`,
+        [userId, peerUserId]
+      );
+      if (!(friendship.rows[0]?.exists ?? false)) {
+        throw new AppError(403, ErrorCodes.FORBIDDEN, 'A direct room can only be opened with a friend.');
+      }
+    }
 
     if (!hasBotParticipant) {
       await this.db.query(
@@ -310,6 +324,23 @@ export class ChatService {
     const row = result.rows[0];
     if (!row) {
       throw new AppError(403, ErrorCodes.FORBIDDEN, 'You are not a member of this room.');
+    }
+
+    const peerUserId = row.user_a_id === userId ? row.user_b_id : row.user_a_id;
+    const hasBotParticipant = await this.hasActiveBotParticipant(userId, peerUserId);
+    if (!hasBotParticipant) {
+      const friendship = await this.db.query<{ exists: boolean }>(
+        `SELECT EXISTS(
+           SELECT 1
+           FROM friendships
+           WHERE user_id = $1
+             AND friend_user_id = $2
+         ) AS exists`,
+        [userId, peerUserId]
+      );
+      if (!(friendship.rows[0]?.exists ?? false)) {
+        throw new AppError(403, ErrorCodes.FORBIDDEN, 'This direct friendship is no longer active.');
+      }
     }
 
     return row;

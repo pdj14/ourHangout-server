@@ -1,5 +1,5 @@
 import { promises as fs } from 'fs';
-import { relative, resolve } from 'path';
+import { isAbsolute, relative, resolve } from 'path';
 import type { FastifyInstance, FastifyReply } from 'fastify';
 import { env } from '../../config/env';
 import { AppError, ErrorCodes } from '../../lib/errors';
@@ -10,7 +10,7 @@ function resolveGuardianFile(relativePath: string): string {
   const absolutePath = resolve(guardianConsoleRoot, relativePath);
   const relativeToRoot = relative(guardianConsoleRoot, absolutePath);
 
-  if (!relativeToRoot || relativeToRoot.startsWith('..')) {
+  if (!relativeToRoot || relativeToRoot.startsWith('..') || isAbsolute(relativeToRoot)) {
     throw new AppError(400, ErrorCodes.VALIDATION_ERROR, 'Invalid Guardian Console file path.');
   }
 
@@ -40,8 +40,7 @@ export async function guardianConsoleRoutes(app: FastifyInstance): Promise<void>
   app.get('/guardian/', async (_request, reply) => sendStaticFile(reply, 'index.html', 'text/html; charset=utf-8'));
   app.get('/guardian/assets/runtime-config.js', async (_request, reply) => {
     const body = `window.__GUARDIAN_CONFIG__ = ${JSON.stringify({
-      googleClientId: env.GOOGLE_CLIENT_IDS[0] ?? '',
-      guardianMasterEmails: env.GUARDIAN_MASTER_EMAILS
+      googleClientId: env.GOOGLE_CLIENT_IDS[0] ?? ''
     })};`;
 
     reply.header('Cache-Control', 'no-cache');

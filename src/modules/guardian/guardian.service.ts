@@ -1,6 +1,6 @@
 import { promises as fs } from 'fs';
 import type { Dirent } from 'fs';
-import { relative, resolve } from 'path';
+import { isAbsolute, relative, resolve } from 'path';
 import type { FastifyBaseLogger } from 'fastify';
 import type { Pool } from 'pg';
 import { env } from '../../config/env';
@@ -44,11 +44,6 @@ type SummaryAssetsRow = {
 
 type CountRow = {
   count: number;
-};
-
-type GuardianAccessRow = {
-  role: UserRole;
-  email: string;
 };
 
 type TopStorageUserRow = {
@@ -224,7 +219,7 @@ function resolveMediaStoragePath(fileUrl: string): string {
   const absolutePath = resolve(root, relativePath);
   const relativeToRoot = relative(root, absolutePath);
 
-  if (!relativeToRoot || relativeToRoot.startsWith('..')) {
+  if (!relativeToRoot || relativeToRoot.startsWith('..') || isAbsolute(relativeToRoot)) {
     throw new AppError(400, ErrorCodes.VALIDATION_ERROR, 'Invalid media file path.');
   }
 
@@ -818,19 +813,28 @@ export class GuardianService {
 
   async revokeUserSessions(requesterUserId: string, targetUserId: string): Promise<{ revoked: boolean }> {
     await this.assertParentRole(requesterUserId);
-
-    const result = await this.db.query<{ id: string }>(
-      `UPDATE refresh_tokens
-       SET revoked_at = NOW()
-       WHERE user_id = $1
-         AND revoked_at IS NULL
-       RETURNING id`,
-      [targetUserId]
-    );
-
-    return {
-      revoked: (result.rowCount ?? 0) > 0
-    };
+    const client = await this.db.connect();
+    try {
+      await client.query('BEGIN');
+      await client.query(`SELECT id FROM users WHERE id = $1 FOR UPDATE`, [targetUserId]);
+      const result = await client.query<{ id: string }>(
+        `UPDATE refresh_tokens
+         SET revoked_at = NOW()
+         WHERE user_id = $1
+           AND revoked_at IS NULL
+         RETURNING id`,
+        [targetUserId]
+      );
+      await client.query('COMMIT');
+      return {
+        revoked: (result.rowCount ?? 0) > 0
+      };
+    } catch (error) {
+      await client.query('ROLLBACK');
+      throw error;
+    } finally {
+      client.release();
+    }
   }
 
   async listFamilyLinks(requesterUserId: string): Promise<{
@@ -1843,29 +1847,6 @@ export class GuardianService {
       return;
     }
 
-    const result = await this.db.query<GuardianAccessRow>(
-      `SELECT role,
-              email
-       FROM users
-       WHERE id = $1
-       LIMIT 1`,
-      [userId]
-    );
-
-    const row = result.rows[0];
-    if (!row) {
-      throw new AppError(404, ErrorCodes.RESOURCE_NOT_FOUND, 'User not found.');
-    }
-
-    const normalizedEmail = row.email.trim().toLowerCase();
-    const isGuardianMaster = env.GUARDIAN_MASTER_EMAILS.includes(normalizedEmail);
-
-    if (row.role !== 'parent' && !isGuardianMaster) {
-      throw new AppError(
-        403,
-        ErrorCodes.FORBIDDEN,
-        'Only parent accounts or configured guardian master accounts can access Guardian Console.'
-      );
-    }
+    throw new AppError(403, ErrorCodes.FORBIDDEN, 'Only Guardian Console can access this operation.');
   }
 }

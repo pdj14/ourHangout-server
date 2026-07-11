@@ -1,16 +1,18 @@
 ﻿import { customAlphabet } from 'nanoid';
 import type { FastifyBaseLogger } from 'fastify';
+import { createHash } from 'crypto';
 import type { Pool, PoolClient } from 'pg';
 import type { AppEnv } from '../../config/env';
 import { AppError, ErrorCodes } from '../../lib/errors';
 
-const pairingCodeGenerator = customAlphabet('ABCDEFGHJKLMNPQRSTUVWXYZ23456789', 6);
+const pairingCodeGenerator = customAlphabet('ABCDEFGHJKLMNPQRSTUVWXYZ23456789', 10);
 
 type RelationshipType = 'friend' | 'parent_child';
 
 type PairingCodeRow = {
   id: string;
-  code: string;
+  code: string | null;
+  code_hash: string;
   created_by: string;
   consumed_by: string | null;
   relationship_type: RelationshipType;
@@ -72,31 +74,62 @@ export class PairingService {
     expiresAt: string;
     ttlSeconds: number;
   }> {
-    const effectiveTtlSeconds = ttlSeconds && ttlSeconds > 0 ? ttlSeconds : this.env.PAIRING_CODE_TTL_SECONDS;
+    const requestedTtl = ttlSeconds && ttlSeconds > 0 ? ttlSeconds : this.env.PAIRING_CODE_TTL_SECONDS;
+    const effectiveTtlSeconds = Math.min(3600, Math.max(30, Math.floor(requestedTtl)));
+    const client = await this.db.connect();
 
-    for (let attempt = 0; attempt < 5; attempt += 1) {
-      const code = pairingCodeGenerator();
-      const expiresAt = new Date(Date.now() + effectiveTtlSeconds * 1000);
-
-      try {
-        await this.db.query(
-          `INSERT INTO pairing_codes (code, created_by, expires_at, relationship_type)
-           VALUES ($1, $2, $3, $4)`,
-          [code, createdByUserId, expiresAt, relationshipType]
-        );
-
-        return {
-          code,
-          relationshipType,
-          expiresAt: expiresAt.toISOString(),
-          ttlSeconds: effectiveTtlSeconds
-        };
-      } catch (error) {
-        this.logger.warn({ error, attempt, createdByUserId }, 'Pairing code collision detected. Retrying.');
+    try {
+      await client.query('BEGIN');
+      await client.query('SELECT pg_advisory_xact_lock(hashtext($1))', [`pairing:${createdByUserId}`]);
+      const creator = await client.query<{ id: string }>(
+        `SELECT id FROM users WHERE id = $1`,
+        [createdByUserId]
+      );
+      if (!creator.rows[0]) {
+        throw new AppError(404, ErrorCodes.RESOURCE_NOT_FOUND, 'User not found.');
       }
-    }
 
-    throw new AppError(500, ErrorCodes.INTERNAL_ERROR, 'Failed to generate pairing code. Please retry.');
+      await client.query(
+        `DELETE FROM pairing_codes
+         WHERE created_by = $1`,
+        [createdByUserId]
+      );
+
+      for (let attempt = 0; attempt < 5; attempt += 1) {
+        const code = pairingCodeGenerator();
+        const codeHash = this.hashPairingCode(code);
+        const expiresAt = new Date(Date.now() + effectiveTtlSeconds * 1000);
+        await client.query('SAVEPOINT pairing_code_insert');
+        try {
+          await client.query(
+            `INSERT INTO pairing_codes (code, code_hash, created_by, expires_at, relationship_type)
+             VALUES (NULL, $1, $2, $3, $4)`,
+            [codeHash, createdByUserId, expiresAt, relationshipType]
+          );
+          await client.query('RELEASE SAVEPOINT pairing_code_insert');
+          await client.query('COMMIT');
+          return {
+            code,
+            relationshipType,
+            expiresAt: expiresAt.toISOString(),
+            ttlSeconds: effectiveTtlSeconds
+          };
+        } catch (error) {
+          await client.query('ROLLBACK TO SAVEPOINT pairing_code_insert');
+          if ((error as { code?: string }).code !== '23505') {
+            throw error;
+          }
+          this.logger.warn({ attempt, createdByUserId }, 'Pairing code collision detected. Retrying.');
+        }
+      }
+
+      throw new AppError(500, ErrorCodes.INTERNAL_ERROR, 'Failed to generate pairing code. Please retry.');
+    } catch (error) {
+      await client.query('ROLLBACK');
+      throw error;
+    } finally {
+      client.release();
+    }
   }
 
   async consumeCode(userId: string, codeInput: string): Promise<{
@@ -114,39 +147,35 @@ export class PairingService {
       await client.query('BEGIN');
 
       const selectResult = await client.query<PairingCodeRow>(
-        `SELECT id, code, created_by, consumed_by, relationship_type, created_at, expires_at, consumed_at
-         FROM pairing_codes
-         WHERE code = $1
-         FOR UPDATE`,
-        [code]
+        `UPDATE pairing_codes
+         SET consumed_by = $1,
+             consumed_at = NOW()
+         WHERE code_hash = $2
+           AND consumed_at IS NULL
+           AND expires_at > NOW()
+         RETURNING id,
+                   code,
+                   code_hash,
+                   created_by,
+                   consumed_by,
+                   relationship_type,
+                   created_at,
+                   expires_at,
+                   consumed_at`,
+        [userId, this.hashPairingCode(code)]
       );
 
       const row = selectResult.rows[0];
       if (!row) {
-        throw new AppError(404, ErrorCodes.RESOURCE_NOT_FOUND, 'Pairing code not found.');
+        throw new AppError(404, ErrorCodes.RESOURCE_NOT_FOUND, 'Pairing code is invalid or expired.');
       }
 
       if (row.created_by === userId) {
         throw new AppError(409, ErrorCodes.CONFLICT, 'You cannot consume your own pairing code.');
       }
 
-      if (row.consumed_at) {
-        throw new AppError(409, ErrorCodes.CONFLICT, 'Pairing code already consumed.');
-      }
-
-      if (row.expires_at.getTime() <= Date.now()) {
-        throw new AppError(410, ErrorCodes.RESOURCE_NOT_FOUND, 'Pairing code has expired.');
-      }
-
       const roleByUserId = await this.fetchUserRoles(client, row.created_by, userId);
       this.validateRelationshipType(row.relationship_type, roleByUserId[row.created_by], roleByUserId[userId]);
-
-      await client.query(
-        `UPDATE pairing_codes
-         SET consumed_by = $1, consumed_at = NOW()
-         WHERE id = $2`,
-        [userId, row.id]
-      );
 
       const relationship = await this.createRelationshipIfMissing(client, {
         userIdA: row.created_by,
@@ -160,7 +189,7 @@ export class PairingService {
       await client.query('COMMIT');
 
       return {
-        code: row.code,
+        code,
         pairedWithUserId: row.created_by,
         relationshipType: row.relationship_type,
         relationshipId: relationship.id,
@@ -224,6 +253,10 @@ export class PairingService {
       ...(row.room_id ? { roomId: row.room_id } : {}),
       createdAt: row.created_at.toISOString()
     }));
+  }
+
+  private hashPairingCode(code: string): string {
+    return createHash('sha256').update(code).digest('hex');
   }
 
   private async fetchUserRoles(client: PoolClient, creatorId: string, consumerId: string): Promise<Record<string, 'parent' | 'user'>> {

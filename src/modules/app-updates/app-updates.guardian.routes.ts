@@ -1,4 +1,6 @@
 import type { FastifyInstance } from 'fastify';
+import { env } from '../../config/env';
+import { admitBinaryUpload } from '../../lib/binary-upload-gate';
 import { AppError, ErrorCodes } from '../../lib/errors';
 import { AppUpdatesService } from './app-updates.service';
 
@@ -24,7 +26,9 @@ export async function guardianAppUpdatesRoutes(app: FastifyInstance): Promise<vo
   app.put(
     '/',
     {
-      ...guardianAuth,
+      onRequest: [app.authenticateGuardian, admitBinaryUpload],
+      bodyLimit: env.BINARY_BODY_LIMIT_BYTES,
+      config: { rateLimit: { max: 3, timeWindow: '1 minute' } },
       schema: {
         tags: ['guardian'],
         summary: 'Upload and publish the latest Android APK for Guardian Console',

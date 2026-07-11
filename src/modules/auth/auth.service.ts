@@ -3,7 +3,7 @@ import { customAlphabet } from 'nanoid';
 import bcrypt from 'bcryptjs';
 import { OAuth2Client } from 'google-auth-library';
 import type { FastifyBaseLogger } from 'fastify';
-import type { Pool } from 'pg';
+import type { Pool, PoolClient } from 'pg';
 import type { AppEnv } from '../../config/env';
 import { AppError, ErrorCodes } from '../../lib/errors';
 import { normalizePhoneE164 } from '../../lib/phone';
@@ -32,6 +32,8 @@ type GoogleIdentity = {
   displayName: string | null;
 };
 
+const DUMMY_PASSWORD_HASH = '$2b$12$KfUwhWu4PRqQDQfxJl1eUuJvkJEAkzoB2ntfixJV9TZAwUV2NNzw.';
+
 export class AuthService {
   private googleClient?: OAuth2Client;
 
@@ -50,6 +52,9 @@ export class AuthService {
   }): Promise<{ user: SafeUser; tokens: AuthTokenResponse }> {
     const email = params.email.trim().toLowerCase();
 
+    this.assertPublicRoleAllowed(params.role);
+    this.assertPasswordLength(params.password);
+
     const existing = await this.db.query<{ id: string }>(
       `SELECT id
        FROM users
@@ -62,14 +67,22 @@ export class AuthService {
       throw new AppError(409, ErrorCodes.CONFLICT, 'Email already exists.');
     }
 
-    const passwordHash = await bcrypt.hash(params.password, 10);
+    const passwordHash = await bcrypt.hash(params.password, this.env.PASSWORD_HASH_COST);
 
-    const insert = await this.db.query<UserRow>(
-      `INSERT INTO users (email, password_hash, role, auth_provider, display_name)
-       VALUES ($1, $2, $3, 'local', $4)
-       RETURNING id, email, role, password_hash, auth_provider, provider_user_id, display_name, phone_e164, created_at`,
-      [email, passwordHash, params.role, params.displayName?.trim() ?? null]
-    );
+    let insert;
+    try {
+      insert = await this.db.query<UserRow>(
+        `INSERT INTO users (email, password_hash, role, auth_provider, display_name)
+         VALUES ($1, $2, $3, 'local', $4)
+         RETURNING id, email, role, password_hash, auth_provider, provider_user_id, display_name, phone_e164, created_at`,
+        [email, passwordHash, params.role, params.displayName?.trim() ?? null]
+      );
+    } catch (error) {
+      if ((error as { code?: string }).code === '23505') {
+        throw new AppError(409, ErrorCodes.CONFLICT, 'Email already exists.');
+      }
+      throw error;
+    }
 
     const user = insert.rows[0];
     const tokens = await this.issueTokens(user);
@@ -84,12 +97,8 @@ export class AuthService {
     const email = emailInput.trim().toLowerCase();
 
     const user = await this.findUserByEmail(email);
-    if (!user || !user.password_hash) {
-      throw new AppError(401, ErrorCodes.AUTH_INVALID_CREDENTIALS, 'Invalid email or password.');
-    }
-
-    const passwordMatched = await bcrypt.compare(password, user.password_hash);
-    if (!passwordMatched) {
+    const passwordMatched = await bcrypt.compare(password, user?.password_hash ?? DUMMY_PASSWORD_HASH);
+    if (!user || !user.password_hash || !passwordMatched) {
       throw new AppError(401, ErrorCodes.AUTH_INVALID_CREDENTIALS, 'Invalid email or password.');
     }
 
@@ -151,14 +160,39 @@ export class AuthService {
       };
     }
 
-    const created = await this.db.query<UserRow>(
-      `INSERT INTO users (email, password_hash, role, auth_provider, provider_user_id, display_name)
-       VALUES ($1, NULL, $2, 'google', $3, $4)
-       RETURNING id, email, role, password_hash, auth_provider, provider_user_id, display_name, phone_e164, created_at`,
-      [identity.email, params.role ?? 'user', identity.providerUserId, identity.displayName]
-    );
+    this.assertPublicRoleAllowed(params.role ?? 'user');
 
-    const user = created.rows[0];
+    let user: UserRow;
+    try {
+      const created = await this.db.query<UserRow>(
+        `INSERT INTO users (email, password_hash, role, auth_provider, provider_user_id, display_name)
+         VALUES ($1, NULL, $2, 'google', $3, $4)
+         RETURNING id, email, role, password_hash, auth_provider, provider_user_id, display_name, phone_e164, created_at`,
+        [identity.email, params.role ?? 'user', identity.providerUserId, identity.displayName]
+      );
+      user = created.rows[0];
+    } catch (error) {
+      if ((error as { code?: string }).code !== '23505') {
+        throw error;
+      }
+
+      const concurrent = await this.db.query<UserRow>(
+        `SELECT id, email, role, password_hash, auth_provider, provider_user_id, display_name, phone_e164, created_at
+         FROM users
+         WHERE provider_user_id = $1
+         LIMIT 1`,
+        [identity.providerUserId]
+      );
+      if (!concurrent.rows[0]) {
+        throw new AppError(
+          409,
+          ErrorCodes.AUTH_PROVIDER_MISMATCH,
+          'This email was registered concurrently with a different authentication provider. Try signing in again.'
+        );
+      }
+      user = concurrent.rows[0];
+    }
+
     const tokens = await this.issueTokens(user);
 
     return {
@@ -210,6 +244,7 @@ export class AuthService {
     currentPassword: string;
     newPassword: string;
   }): Promise<void> {
+    this.assertPasswordLength(params.newPassword);
     const user = await this.getUserRowById(params.userId);
 
     if (!user.password_hash) {
@@ -226,7 +261,7 @@ export class AuthService {
       throw new AppError(409, ErrorCodes.CONFLICT, 'New password must be different from current password.');
     }
 
-    const newHash = await bcrypt.hash(params.newPassword, 10);
+    const newHash = await bcrypt.hash(params.newPassword, this.env.PASSWORD_HASH_COST);
 
     await this.db.query(
       `UPDATE users
@@ -276,45 +311,61 @@ export class AuthService {
 
   async refresh(refreshToken: string): Promise<{ user: SafeUser; tokens: AuthTokenResponse }> {
     const tokenHash = this.hashRefreshToken(refreshToken);
+    const client = await this.db.connect();
 
-    const result = await this.db.query<
-      UserRow & {
-        refresh_token_id: string;
+    try {
+      await client.query('BEGIN');
+      const owner = await client.query<{ id: string }>(
+        `SELECT u.id
+         FROM users u
+         INNER JOIN refresh_tokens rt ON rt.user_id = u.id
+         WHERE rt.token_hash = $1
+           AND rt.revoked_at IS NULL
+           AND rt.expires_at > NOW()
+         FOR UPDATE OF u`,
+        [tokenHash]
+      );
+      if (!owner.rows[0]) {
+        throw new AppError(401, ErrorCodes.AUTH_REFRESH_INVALID, 'Refresh token is invalid or expired.');
       }
-    >(
-      `SELECT u.id,
-              u.email,
-              u.role,
-              u.password_hash,
-              u.auth_provider,
-              u.provider_user_id,
-              u.display_name,
-              u.phone_e164,
-              u.created_at,
-              rt.id AS refresh_token_id
-       FROM refresh_tokens rt
-       INNER JOIN users u ON u.id = rt.user_id
-       WHERE rt.token_hash = $1
-         AND rt.revoked_at IS NULL
-         AND rt.expires_at > NOW()
-       LIMIT 1`,
-      [tokenHash]
-    );
 
-    const row = result.rows[0];
-    if (!row) {
-      throw new AppError(401, ErrorCodes.AUTH_REFRESH_INVALID, 'Refresh token is invalid or expired.');
+      const result = await client.query<UserRow>(
+        `UPDATE refresh_tokens rt
+         SET revoked_at = NOW()
+         FROM users u
+         WHERE rt.token_hash = $1
+           AND rt.user_id = u.id
+           AND rt.revoked_at IS NULL
+           AND rt.expires_at > NOW()
+         RETURNING u.id,
+                   u.email,
+                   u.role,
+                   u.password_hash,
+                   u.auth_provider,
+                   u.provider_user_id,
+                   u.display_name,
+                   u.phone_e164,
+                   u.created_at`,
+        [tokenHash]
+      );
+
+      const row = result.rows[0];
+      if (!row) {
+        throw new AppError(401, ErrorCodes.AUTH_REFRESH_INVALID, 'Refresh token is invalid or expired.');
+      }
+
+      const tokens = await this.issueTokens(row, client);
+      await client.query('COMMIT');
+      return {
+        user: toSafeUser(row),
+        tokens
+      };
+    } catch (error) {
+      await client.query('ROLLBACK');
+      throw error;
+    } finally {
+      client.release();
     }
-
-    await this.db.query('UPDATE refresh_tokens SET revoked_at = NOW() WHERE id = $1 AND revoked_at IS NULL', [
-      row.refresh_token_id
-    ]);
-
-    const tokens = await this.issueTokens(row);
-    return {
-      user: toSafeUser(row),
-      tokens
-    };
   }
 
   async logout(userId: string, refreshToken: string): Promise<void> {
@@ -330,13 +381,24 @@ export class AuthService {
   }
 
   async logoutAll(userId: string): Promise<void> {
-    await this.db.query(
-      `UPDATE refresh_tokens
-       SET revoked_at = NOW()
-       WHERE user_id = $1
-         AND revoked_at IS NULL`,
-      [userId]
-    );
+    const client = await this.db.connect();
+    try {
+      await client.query('BEGIN');
+      await client.query('SELECT id FROM users WHERE id = $1 FOR UPDATE', [userId]);
+      await client.query(
+        `UPDATE refresh_tokens
+         SET revoked_at = NOW()
+         WHERE user_id = $1
+           AND revoked_at IS NULL`,
+        [userId]
+      );
+      await client.query('COMMIT');
+    } catch (error) {
+      await client.query('ROLLBACK');
+      throw error;
+    } finally {
+      client.release();
+    }
   }
 
   async getUserById(userId: string): Promise<SafeUser> {
@@ -373,7 +435,10 @@ export class AuthService {
     return user;
   }
 
-  private async issueTokens(user: { id: string; email: string; role: string }): Promise<AuthTokenResponse> {
+  private async issueTokens(
+    user: { id: string; email: string; role: string },
+    transactionClient?: PoolClient
+  ): Promise<AuthTokenResponse> {
     const payload = toJwtPayload(user);
     const accessToken = this.signAccessToken(payload);
 
@@ -381,11 +446,35 @@ export class AuthService {
     const refreshTokenHash = this.hashRefreshToken(refreshToken);
     const expiresAt = new Date(Date.now() + this.env.REFRESH_TOKEN_TTL_DAYS * 24 * 60 * 60 * 1000);
 
-    await this.db.query(
-      `INSERT INTO refresh_tokens (user_id, token_hash, expires_at)
-       VALUES ($1, $2, $3)`,
-      [user.id, refreshTokenHash, expiresAt]
-    );
+    const insertRefreshToken = async (executor: Pool | PoolClient): Promise<void> => {
+      await executor.query(
+        `WITH cleanup AS (
+           DELETE FROM refresh_tokens
+           WHERE user_id = $1
+             AND (expires_at <= NOW() OR revoked_at IS NOT NULL)
+         )
+         INSERT INTO refresh_tokens (user_id, token_hash, expires_at)
+         VALUES ($1, $2, $3)`,
+        [user.id, refreshTokenHash, expiresAt]
+      );
+    };
+
+    if (transactionClient) {
+      await insertRefreshToken(transactionClient);
+    } else {
+      const client = await this.db.connect();
+      try {
+        await client.query('BEGIN');
+        await client.query('SELECT id FROM users WHERE id = $1 FOR UPDATE', [user.id]);
+        await insertRefreshToken(client);
+        await client.query('COMMIT');
+      } catch (error) {
+        await client.query('ROLLBACK');
+        throw error;
+      } finally {
+        client.release();
+      }
+    }
 
     this.logger.debug({ userId: user.id }, 'Issued new token pair');
 
@@ -446,6 +535,26 @@ export class AuthService {
       email: payload.email.toLowerCase(),
       displayName: payload.name?.trim() || null
     };
+  }
+
+  private assertPublicRoleAllowed(role: 'parent' | 'user'): void {
+    if (role === 'parent' && !this.env.ALLOW_PUBLIC_PARENT_SIGNUP) {
+      throw new AppError(
+        403,
+        ErrorCodes.FORBIDDEN,
+        'Parent role assignment requires Guardian Console approval.'
+      );
+    }
+  }
+
+  private assertPasswordLength(password: string): void {
+    if (Buffer.byteLength(password, 'utf8') > 72) {
+      throw new AppError(
+        400,
+        ErrorCodes.VALIDATION_ERROR,
+        'Password must be 72 UTF-8 bytes or fewer.'
+      );
+    }
   }
 
   private hashRefreshToken(refreshToken: string): string {

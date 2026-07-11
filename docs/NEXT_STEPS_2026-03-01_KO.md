@@ -1,5 +1,8 @@
 # OurHangout Backend 인수인계 메모 (2026-03-01)
 
+> 이 문서는 당시 기록입니다. 현재 배포 명령과 보안 설정은 `docs/SYNOLOGY_DEPLOY.md` 및
+> `docs/SERVER_AUDIT_2026-07-10_KO.md`를 우선합니다.
+
 이 문서는 오늘 진행 상태와 내일 이어서 할 작업을 정리한 핸드오프 문서입니다.
 
 ## 1) 오늘 완료된 상태
@@ -28,8 +31,7 @@
 ```bash
 cd /volume1/docker/ourhangout-backend
 docker-compose up -d postgres redis
-docker-compose run --rm migrate
-docker-compose up -d api
+docker-compose up -d --build api
 docker-compose ps
 ```
 
@@ -79,7 +81,7 @@ curl -s http://localhost:3000/v1/bots \
 
 ## 6) 남은 TODO
 
-1. DSM 7.1 환경용 compose 오버라이드 파일(`docker-compose.synology71.yml`) 추가 검토
+1. DSM 7.1에서는 현재 단일 compose 또는 `scripts/deploy-main.sh` 배포 경로 검증
 2. NAS 리버스 프록시 + HTTPS(443) 구성
 3. Google 로그인 운영 설정 (`GOOGLE_CLIENT_ID`) 적용
 4. OpenClaw `http` 모드 네트워크 경로 검증

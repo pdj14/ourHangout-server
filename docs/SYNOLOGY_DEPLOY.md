@@ -4,7 +4,7 @@
 
 ## 0) 목표와 전제
 
-1. 목표: NAS에서 `api + postgres + redis + migrate`를 Docker Compose로 기동
+1. 목표: NAS에서 `api + postgres + redis`를 Docker Compose로 기동 (`api`가 listen 전에 migration 실행)
 2. 전제:
    - DSM 7.x
    - NAS와 같은 네트워크에서 테스트할 PC 1대
@@ -37,6 +37,8 @@ NODE_ENV=production
 PORT=3000
 JWT_SECRET=<32자 이상 랜덤 문자열>
 POSTGRES_PASSWORD=<강한 비밀번호>
+DATABASE_URL=postgresql://ourhangout:<같은 비밀번호를 URI 인코딩>@postgres:5432/ourhangout
+PUBLIC_BASE_URL=https://<외부에서 접근할 API 도메인>
 CORS_ORIGINS=http://<APP_HOST_OR_DOMAIN>
 OPENCLAW_MODE=mock
 OPENCLAW_BASE_URL=http://127.0.0.1:18888
@@ -62,41 +64,33 @@ OPENCLAW_BASE_URL=http://127.0.0.1:18888
 
 ## 3-B) DSM 7.1.x (Docker 패키지 + SSH)
 
-DSM 7.1 기본 `docker-compose`는 Compose v1이라 아래 제한이 있습니다.
+현재 compose는 별도 migrate service와 `service_completed_successfully`를 사용하지 않아 Compose v1에서도
+동일 파일을 사용합니다. PostgreSQL/Redis 호스트 포트도 기본적으로 공개하지 않습니다.
 
-1. `service_completed_successfully` 조건 미지원
-2. 호스트 포트 충돌 가능 (`5432`, `6379`)
-
-권장 수정:
-
-1. `docker-compose.yml`에서 `api.depends_on.migrate` 블록 제거
-2. `postgres`, `redis` 서비스의 `ports` 블록 제거
-3. `logs` 폴더 생성: `mkdir -p /volume1/docker/ourhangout-backend/logs`
-
-실행 순서(SSH root):
+최초 실행(SSH root):
 
 ```bash
 cd /volume1/docker/ourhangout-backend
-docker-compose build
-docker-compose up -d postgres redis
-docker-compose run --rm migrate
-docker-compose up -d api
+mkdir -p logs storage/media storage/app-updates
+docker-compose up -d --build
 docker-compose ps
 ```
+
+Git clone으로 설치한 서버 업데이트는 중복 데이터 preflight, API 안전 중지, migration, health 확인을
+한 번에 수행하는 `sh scripts/deploy-main.sh`를 권장합니다.
 
 ## 4) 정상 기동 확인
 
 정상 컨테이너 상태:
 
-1. `ourhangout-migrate` -> 성공 후 종료(Exited: 0) 또는 `run --rm` 실행 성공
-2. `ourhangout-api` -> Running
-3. `ourhangout-postgres` -> Running
-4. `ourhangout-redis` -> Running
+1. `ourhangout-api` -> Running (시작 로그에서 migration 완료 후 listening)
+2. `ourhangout-postgres` -> Running
+3. `ourhangout-redis` -> Running
 
 로그 확인 포인트:
 
-1. `ourhangout-migrate` 로그에서 migration 성공
-2. `ourhangout-api` 로그에서 서버 listening 메시지
+1. `ourhangout-api` 로그에서 migration 성공
+2. 이어서 서버 listening 메시지
 
 ## 5) API 동작 확인 (PC에서)
 
@@ -105,22 +99,22 @@ curl -s http://<NAS_IP>:3000/health
 curl -s http://<NAS_IP>:3000/ready
 ```
 
-Swagger 문서:
+Swagger 문서(운영 기본 비활성화, 명시적으로 `SWAGGER_ENABLED=true`인 환경만):
 
 - `http://<NAS_IP>:3000/docs`
 
-## 6) 초기 계정 시드(선택)
+## 6) 초기 계정
 
-API 컨테이너 터미널에서:
+개발 seed는 문서화된 공용 비밀번호를 사용하므로 production에서 의도적으로 거부됩니다. 운영에서는
+일반 가입/Google 로그인 후 Guardian Console에서 필요한 역할을 관리합니다. production 컨테이너에서
+아래 명령을 실행하지 마세요.
+
+과거 버전에서 seed를 실행한 운영 DB라면 `parent@ourhangout.local`과 `child@ourhangout.local` 계정을
+반드시 제거하거나 비밀번호를 변경하고 기존 세션을 폐기합니다.
 
 ```bash
 node dist/scripts/seed.js
 ```
-
-기본 계정:
-
-1. `parent@ourhangout.local / Parent123!`
-2. `child@ourhangout.local / Child123!`
 
 ## 7) OpenClaw 연동 전환 순서
 
@@ -163,10 +157,10 @@ OPENCLAW_RETRY_COUNT=2
 
 ## 10) 업데이트 절차
 
-1. 새 코드로 프로젝트 파일 교체(또는 git pull)
-2. Container Manager에서 프로젝트 재배포(재빌드)
-3. `ourhangout-migrate` 성공 여부 확인
-4. `/health`, `/ready` 재검증
+1. DB backup과 감사 문서의 migration 중복 쿼리 확인
+2. Git clone에서는 `sh scripts/deploy-main.sh` 실행
+3. 파일 업로드 방식이면 Container Manager에서 프로젝트 재빌드/재배포
+4. API 로그의 migration 성공과 `/health`, `/ready` 재검증
 
 ---
 
@@ -174,7 +168,7 @@ OPENCLAW_RETRY_COUNT=2
 
 1. `.env` 생성/수정 완료
 2. Container Manager 프로젝트 생성 완료
-3. `migrate/api/postgres/redis` 상태 정상
+3. `api/postgres/redis` 상태 정상
 4. `/health`, `/ready` 정상
 5. `mock` 모드 메시지 왕복 확인
 6. 필요 시 `http` 모드로 전환 후 OpenClaw 연결 확인
