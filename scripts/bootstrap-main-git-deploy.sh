@@ -33,11 +33,66 @@ require_command() {
   command -v "$1" >/dev/null 2>&1 || fail "$1 is required."
 }
 
+resolve_container() {
+  requested_name="$1"
+  compose_service="$2"
+
+  if docker inspect "$requested_name" >/dev/null 2>&1; then
+    printf '%s' "$requested_name"
+    return 0
+  fi
+
+  candidates=$(docker ps -q \
+    --filter "label=com.docker.compose.service=$compose_service" \
+    --filter "label=com.docker.compose.project.working_dir=$TARGET_DIR")
+  if [ -z "$candidates" ]; then
+    candidates=$(docker ps -aq \
+      --filter "label=com.docker.compose.service=$compose_service" \
+      --filter "label=com.docker.compose.project.working_dir=$TARGET_DIR")
+  fi
+  if [ -z "$candidates" ]; then
+    candidates=$(docker ps -q --filter "name=$requested_name")
+  fi
+  if [ -z "$candidates" ]; then
+    candidates=$(docker ps -aq --filter "name=$requested_name")
+  fi
+
+  if [ -n "$candidates" ]; then
+    set -- $candidates
+    printf '%s' "$1"
+    return 0
+  fi
+
+  return 1
+}
+
+resolve_runtime_containers() {
+  resolved_postgres=$(resolve_container "$POSTGRES_CONTAINER" postgres || true)
+  [ -n "$resolved_postgres" ] || fail "PostgreSQL container not found for target: $TARGET_DIR"
+  POSTGRES_CONTAINER="$resolved_postgres"
+
+  resolved_api=$(resolve_container "$API_CONTAINER" api || true)
+  if [ -n "$resolved_api" ]; then
+    API_CONTAINER="$resolved_api"
+  fi
+
+  log "Using PostgreSQL container: $POSTGRES_CONTAINER"
+  if [ -n "$resolved_api" ]; then
+    log "Using API container: $API_CONTAINER"
+  fi
+}
+
 create_database_dump() {
-  docker inspect "$POSTGRES_CONTAINER" >/dev/null 2>&1 || fail "PostgreSQL container not found: $POSTGRES_CONTAINER"
   log "Creating PostgreSQL dump: $DB_DUMP"
   docker exec "$POSTGRES_CONTAINER" sh -c 'exec pg_dump -U "$POSTGRES_USER" "$POSTGRES_DB"' > "$DB_DUMP"
   [ -s "$DB_DUMP" ] || fail "Database dump is empty: $DB_DUMP"
+}
+
+remove_legacy_migrate_containers() {
+  migrate_ids=$(docker ps -aq --filter "name=$MIGRATE_CONTAINER")
+  if [ -n "$migrate_ids" ]; then
+    docker rm -f $migrate_ids >/dev/null 2>&1 || true
+  fi
 }
 
 on_exit() {
@@ -94,6 +149,8 @@ require_command curl
 [ ! -e "$NEW_DIR" ] || fail "Temporary clone path already exists: $NEW_DIR"
 [ ! -e "$BACKUP_DIR" ] || fail "Backup path already exists: $BACKUP_DIR"
 
+resolve_runtime_containers
+
 if git -C "$TARGET_DIR" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
   create_database_dump
   log "Target is already a Git worktree; updating deployment scripts first."
@@ -104,7 +161,7 @@ if git -C "$TARGET_DIR" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
   DEPLOY_STARTED=1
   cd "$TARGET_DIR"
   sh scripts/deploy-main.sh
-  docker rm -f "$MIGRATE_CONTAINER" >/dev/null 2>&1 || true
+  remove_legacy_migrate_containers
   curl -fsS "$VERIFY_URL/health" >/dev/null
   curl -fsS "$VERIFY_URL/ready" >/dev/null
   log "Deployment finished: $VERIFY_URL"
@@ -147,7 +204,7 @@ DEPLOY_STARTED=1
 cd "$TARGET_DIR"
 sh scripts/deploy-main.sh
 
-docker rm -f "$MIGRATE_CONTAINER" >/dev/null 2>&1 || true
+remove_legacy_migrate_containers
 
 log "Verifying containers and health endpoints."
 docker ps --filter "name=ourhangout"
