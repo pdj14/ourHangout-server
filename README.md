@@ -192,6 +192,7 @@ Use this when moving from NAS/single-node to managed cloud (ALB + ECS/EC2 + RDS 
 | `REFRESH_TOKEN_TTL_DAYS` | no | Refresh token lifetime (days) |
 | `GUARDIAN_CONSOLE_LOGIN_ID` | no | Fixed Guardian Console login id |
 | `GUARDIAN_CONSOLE_PASSWORD` | no | Fixed Guardian Console password |
+| `GUARDIAN_CONSOLE_ALLOW_LEGACY_PASSWORD` | no | Explicitly allow an existing 8-15 character Guardian password; keep `false` for new credentials |
 | `GUARDIAN_CONSOLE_ACCESS_TOKEN_TTL` | no | Guardian Console access token lifetime |
 | `LOG_LEVEL` | no | Pino log level |
 

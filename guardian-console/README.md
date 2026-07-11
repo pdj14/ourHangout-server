@@ -22,4 +22,6 @@ Static web console for parent-role operators to inspect and manage key `ourHango
 - Guardian Console login is disabled until both `GUARDIAN_CONSOLE_LOGIN_ID` and
   `GUARDIAN_CONSOLE_PASSWORD` are configured.
 - Production passwords must be at least 16 characters. Never commit credentials to this repository.
+- An existing 8-15 character credential can be retained only by explicitly setting
+  `GUARDIAN_CONSOLE_ALLOW_LEGACY_PASSWORD=true`. Keep this disabled for new credentials.
 - Only a Guardian Console token can access Guardian APIs and the global report queue.

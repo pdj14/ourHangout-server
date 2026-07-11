@@ -1,5 +1,6 @@
 import dotenv from 'dotenv';
 import { z } from 'zod';
+import { getGuardianConsolePasswordValidationError } from './guardian-password-policy';
 
 dotenv.config({ quiet: true });
 
@@ -52,6 +53,7 @@ const envSchema = z.object({
   PASSWORD_HASH_COST: z.coerce.number().int().min(10).max(14).default(12),
   GUARDIAN_CONSOLE_LOGIN_ID: z.string().default(''),
   GUARDIAN_CONSOLE_PASSWORD: z.string().default(''),
+  GUARDIAN_CONSOLE_ALLOW_LEGACY_PASSWORD: z.string().default('false'),
   GUARDIAN_CONSOLE_ACCESS_TOKEN_TTL: z.string().default('8h'),
   CORS_ORIGINS: z.string().default('http://localhost:5173'),
   RATE_LIMIT_MAX: z.coerce.number().int().positive().default(200),
@@ -157,6 +159,10 @@ const envSchema = z.object({
 
   const guardianLoginId = value.GUARDIAN_CONSOLE_LOGIN_ID.trim();
   const guardianPassword = value.GUARDIAN_CONSOLE_PASSWORD;
+  const allowLegacyGuardianPassword = parseBoolean(
+    value.GUARDIAN_CONSOLE_ALLOW_LEGACY_PASSWORD,
+    false
+  );
   if ((guardianLoginId && !guardianPassword) || (!guardianLoginId && guardianPassword)) {
     context.addIssue({
       code: 'custom',
@@ -164,11 +170,15 @@ const envSchema = z.object({
       message: 'Guardian Console login id and password must either both be set or both be empty.'
     });
   }
-  if (guardianPassword && guardianPassword.length < 16) {
+  const guardianPasswordValidationError = getGuardianConsolePasswordValidationError(
+    guardianPassword,
+    allowLegacyGuardianPassword
+  );
+  if (guardianPasswordValidationError) {
     context.addIssue({
       code: 'custom',
       path: ['GUARDIAN_CONSOLE_PASSWORD'],
-      message: 'Guardian Console password must be at least 16 characters in production.'
+      message: guardianPasswordValidationError
     });
   }
 
@@ -239,6 +249,10 @@ export const env = {
   ),
   ALLOW_PUBLIC_PARENT_SIGNUP: parseBoolean(rawEnv.ALLOW_PUBLIC_PARENT_SIGNUP, false),
   SWAGGER_ENABLED: parseBoolean(rawEnv.SWAGGER_ENABLED, rawEnv.NODE_ENV !== 'production'),
+  GUARDIAN_CONSOLE_ALLOW_LEGACY_PASSWORD: parseBoolean(
+    rawEnv.GUARDIAN_CONSOLE_ALLOW_LEGACY_PASSWORD,
+    false
+  ),
   GUARDIAN_CONSOLE_ENABLED:
     rawEnv.GUARDIAN_CONSOLE_LOGIN_ID.trim().length > 0 && rawEnv.GUARDIAN_CONSOLE_PASSWORD.length > 0
 };
