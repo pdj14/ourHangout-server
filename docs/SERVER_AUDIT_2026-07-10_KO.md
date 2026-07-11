@@ -20,6 +20,7 @@
 
 - 레거시 봇이 참여한 `rooms` 및 해당 방의 메시지·설정·신고
 - 레거시 봇 사용자와 그 사용자의 구형 `chat_rooms` 및 메시지
+- 폐기된 개발 브랜치가 만든 `pobis`, `openclaw_connector_*` 테이블
 - `bots` 테이블과 `messages.claw_message_id` 컬럼
 
 일반 사용자끼리의 방과 메시지는 이 migration의 삭제 대상이 아니다. 과거 migration
