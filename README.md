@@ -122,6 +122,15 @@ preserves `.env`, `storage`, and `logs`, keeps the original folder as a timestam
 then runs `deploy-main.sh` and verifies `/health` and `/ready`. Its default target is
 `/volume1/docker/ourHangout-server`; override it with `TARGET_DIR=/volumeX/docker/<folder>` if needed.
 
+If a legacy production `.env` still uses the development PostgreSQL password, rotate the
+database role and matching Compose credentials before deployment:
+
+```bash
+sudo -i
+curl -fsSL https://raw.githubusercontent.com/pdj14/ourHangout-server/main/scripts/rotate-compose-postgres-password.sh -o /tmp/rotate-compose-postgres-password.sh
+sh /tmp/rotate-compose-postgres-password.sh
+```
+
 Notes:
 
 - Script aborts if the git worktree is dirty.
