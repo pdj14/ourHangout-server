@@ -25,7 +25,6 @@ export interface ChatMessage {
   content: string;
   direction: MessageDirection;
   ackStatus: AckStatus;
-  clawMessageId?: string;
   createdAt: string;
   deliveredAt?: string;
 }

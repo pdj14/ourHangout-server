@@ -40,15 +40,12 @@ POSTGRES_PASSWORD=<강한 비밀번호>
 DATABASE_URL=postgresql://ourhangout:<같은 비밀번호를 URI 인코딩>@postgres:5432/ourhangout
 PUBLIC_BASE_URL=https://<외부에서 접근할 API 도메인>
 CORS_ORIGINS=http://<APP_HOST_OR_DOMAIN>
-OPENCLAW_MODE=mock
-OPENCLAW_BASE_URL=http://127.0.0.1:18888
 ```
 
 주의:
 
-1. `OPENCLAW_MODE=mock`부터 먼저 검증하세요.
-2. `OPENCLAW_MODE=http`로 전환할 때 `OPENCLAW_BASE_URL`은 NAS에서 실제로 접근 가능한 주소여야 합니다.
-3. 개발 PC의 `adb forward`로 연 포트(`127.0.0.1:18888`)는 NAS에서 접근 불가입니다.
+1. `PUBLIC_BASE_URL`은 앱이 실제로 접근할 수 있는 HTTPS 주소를 사용하세요.
+2. `DATABASE_URL` 비밀번호는 `POSTGRES_PASSWORD`와 같아야 하며 특수문자는 URI 인코딩해야 합니다.
 
 ## 3) 프로젝트 실행 방식 선택
 
@@ -116,33 +113,14 @@ Swagger 문서(운영 기본 비활성화, 명시적으로 `SWAGGER_ENABLED=true
 node dist/scripts/seed.js
 ```
 
-## 7) OpenClaw 연동 전환 순서
-
-권장 순서:
-
-1. `mock` 모드로 기능 먼저 검증
-2. 이후 `http` 모드 전환
-
-```env
-OPENCLAW_MODE=http
-OPENCLAW_BASE_URL=http://<OPENCLAW_DEVICE_IP>:18888
-OPENCLAW_TIMEOUT_MS=3000
-OPENCLAW_RETRY_COUNT=2
-```
-
-중요:
-
-1. NAS가 `<OPENCLAW_DEVICE_IP>:18888`에 실제 TCP 접근 가능해야 합니다.
-2. 접근 불가 시 `/ready`가 503이 될 수 있고, API 로그에 `OPENCLAW_UPSTREAM_ERROR`가 남습니다.
-
-## 8) 운영 보안 권장
+## 7) 운영 보안 권장
 
 1. `JWT_SECRET`, DB 비밀번호를 강하게 설정
 2. `CORS_ORIGINS`를 실제 앱 도메인만 허용
 3. 외부 공개 시 443(HTTPS) 리버스 프록시 사용
 4. 기본 상태에서 DB/Redis 포트 외부 노출이 필요 없으면 compose에서 `5432`, `6379` 포트 매핑 제거 권장
 
-## 9) 백업 포인트
+## 8) 백업 포인트
 
 필수 백업 대상:
 
@@ -155,7 +133,7 @@ OPENCLAW_RETRY_COUNT=2
 
 1. 주기적 DB dump + NAS 스냅샷 병행
 
-## 10) 업데이트 절차
+## 9) 업데이트 절차
 
 1. DB backup과 감사 문서의 migration 중복 쿼리 확인
 2. Git clone에서는 `sh scripts/deploy-main.sh` 실행
@@ -170,5 +148,4 @@ OPENCLAW_RETRY_COUNT=2
 2. Container Manager 프로젝트 생성 완료
 3. `api/postgres/redis` 상태 정상
 4. `/health`, `/ready` 정상
-5. `mock` 모드 메시지 왕복 확인
-6. 필요 시 `http` 모드로 전환 후 OpenClaw 연결 확인
+5. 사용자 간 메시지 왕복 확인

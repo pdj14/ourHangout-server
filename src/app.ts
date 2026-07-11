@@ -12,12 +12,6 @@ import { websocketRoutes } from './modules/chat/chat.ws';
 import { ConnectionManager } from './modules/chat/connection-manager';
 import { RedisChatEventBus } from './modules/chat/redis-event-bus';
 import { healthRoutes } from './modules/health/health.routes';
-import { BotService } from './modules/bots/bot.service';
-import { botRoutes } from './modules/bots/bot.routes';
-import { ClawBridgeService } from './modules/openclaw/claw-bridge.service';
-import { OpenClawConnectorHub } from './modules/openclaw/connector-hub';
-import { openClawRoutes } from './modules/openclaw/openclaw.routes';
-import { createClawProvider } from './modules/openclaw/provider.factory';
 import { SocialService } from './modules/social/social.service';
 import { socialRoutes } from './modules/social/social.routes';
 import { PairingService } from './modules/pairing/pairing.service';
@@ -101,14 +95,6 @@ export async function buildServer(): Promise<FastifyInstance> {
   const metrics = new MetricsRegistry();
   const connectionManager = new ConnectionManager(app.log);
   const eventBus = new RedisChatEventBus(redis, redisSubscriber, app.log);
-  const openClawConnectorHub = new OpenClawConnectorHub(app.log);
-  const clawProvider = createClawProvider({
-    env,
-    logger: app.log,
-    connectorHub: openClawConnectorHub
-  });
-  const clawBridge = new ClawBridgeService(clawProvider, env.OPENCLAW_RETRY_COUNT, app.log);
-
   const authService = new AuthService(
     db,
     env,
@@ -121,42 +107,28 @@ export async function buildServer(): Promise<FastifyInstance> {
   const chatService = new ChatService({
     db,
     eventBus,
-    connectionManager,
-    clawBridge,
-    logger: app.log
+    connectionManager
   });
   const fcmPushService = new FcmPushService(env, app.log);
 
   const socialService = new SocialService({
     db,
     connectionManager,
-    clawBridge,
     pushService: fcmPushService,
     logger: app.log
   });
   const familyService = new FamilyService(db, connectionManager, app.log);
   const guardianService = new GuardianService(db, socialService, app.log);
-  const botService = new BotService({
-    db,
-    socialService,
-    logger: app.log
-  });
-
-  await botService.ensureDefaultBots();
-
   app.decorate('db', db);
   app.decorate('redis', redis);
   app.decorate('redisSubscriber', redisSubscriber);
   app.decorate('metrics', metrics);
   app.decorate('connectionManager', connectionManager);
   app.decorate('eventBus', eventBus);
-  app.decorate('openClawConnectorHub', openClawConnectorHub);
-  app.decorate('clawBridge', clawBridge);
   app.decorate('authService', authService);
   app.decorate('pairingService', pairingService);
   app.decorate('contactsService', contactsService);
   app.decorate('chatService', chatService);
-  app.decorate('botService', botService);
   app.decorate('socialService', socialService);
   app.decorate('familyService', familyService);
   app.decorate('guardianService', guardianService);
@@ -183,9 +155,7 @@ export async function buildServer(): Promise<FastifyInstance> {
   await app.register(socialRoutes, { prefix: '/v1' });
   await app.register(guardianRoutes, { prefix: '/v1/guardian' });
   await app.register(guardianAppUpdatesRoutes, { prefix: '/v1/guardian/app-updates' });
-  await app.register(botRoutes, { prefix: '/v1/bots' });
   await app.register(websocketRoutes, { prefix: '/v1' });
-  await app.register(openClawRoutes, { prefix: '/v1/openclaw' });
   await app.register(guardianConsoleRoutes);
 
   app.addHook('onReady', async () => {
@@ -196,7 +166,6 @@ export async function buildServer(): Promise<FastifyInstance> {
   });
 
   app.addHook('onClose', async () => {
-    app.openClawConnectorHub.closeAll();
     app.connectionManager.closeAll();
     await app.eventBus.close();
     await closeRedis();

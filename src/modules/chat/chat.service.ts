@@ -1,7 +1,5 @@
-﻿import type { FastifyBaseLogger } from 'fastify';
 import type { Pool } from 'pg';
 import { AppError, ErrorCodes } from '../../lib/errors';
-import type { ClawBridgeService } from '../openclaw/claw-bridge.service';
 import type { ConnectionManager } from './connection-manager';
 import type { RedisChatEventBus } from './redis-event-bus';
 import type { AckStatus, ChatEvent, ChatMessage, ChatRoom, ChatRoomSummary, MessageDirection } from './chat.types';
@@ -22,37 +20,25 @@ type ChatMessageRow = {
   content: string;
   direction: MessageDirection;
   ack_status: AckStatus;
-  claw_message_id: string | null;
   created_at: Date;
   delivered_at: Date | null;
-};
-
-type BotUserRow = {
-  id: string;
-  bot_key: string;
 };
 
 type ChatServiceDeps = {
   db: Pool;
   eventBus: RedisChatEventBus;
   connectionManager: ConnectionManager;
-  clawBridge: ClawBridgeService;
-  logger: FastifyBaseLogger;
 };
 
 export class ChatService {
   private readonly db: Pool;
   private readonly eventBus: RedisChatEventBus;
   private readonly connectionManager: ConnectionManager;
-  private readonly clawBridge: ClawBridgeService;
-  private readonly logger: FastifyBaseLogger;
 
   constructor(deps: ChatServiceDeps) {
     this.db = deps.db;
     this.eventBus = deps.eventBus;
     this.connectionManager = deps.connectionManager;
-    this.clawBridge = deps.clawBridge;
-    this.logger = deps.logger;
   }
 
   async createDirectRoom(userId: string, peerUserId: string): Promise<ChatRoom> {
@@ -68,32 +54,27 @@ export class ChatService {
     const [userAId, userBId] = [userId, peerUserId].sort();
     const pairKey = `${userAId}:${userBId}`;
 
-    const hasBotParticipant = await this.hasActiveBotParticipant(userAId, userBId);
-    if (!hasBotParticipant) {
-      const friendship = await this.db.query<{ exists: boolean }>(
-        `SELECT EXISTS(
-           SELECT 1
-           FROM friendships
-           WHERE user_id = $1
-             AND friend_user_id = $2
-         ) AS exists`,
-        [userId, peerUserId]
-      );
-      if (!(friendship.rows[0]?.exists ?? false)) {
-        throw new AppError(403, ErrorCodes.FORBIDDEN, 'A direct room can only be opened with a friend.');
-      }
+    const friendship = await this.db.query<{ exists: boolean }>(
+      `SELECT EXISTS(
+         SELECT 1
+         FROM friendships
+         WHERE user_id = $1
+           AND friend_user_id = $2
+       ) AS exists`,
+      [userId, peerUserId]
+    );
+    if (!(friendship.rows[0]?.exists ?? false)) {
+      throw new AppError(403, ErrorCodes.FORBIDDEN, 'A direct room can only be opened with a friend.');
     }
 
-    if (!hasBotParticipant) {
-      await this.db.query(
-        `INSERT INTO user_relationships (pair_key, user_a_id, user_b_id, relationship_type, status, created_via, created_by)
-         VALUES ($1, $2, $3, 'friend', 'active', 'manual', $4)
-         ON CONFLICT (pair_key, relationship_type)
-         DO UPDATE SET
-           status = 'active'`,
-        [pairKey, userAId, userBId, userId]
-      );
-    }
+    await this.db.query(
+      `INSERT INTO user_relationships (pair_key, user_a_id, user_b_id, relationship_type, status, created_via, created_by)
+       VALUES ($1, $2, $3, 'friend', 'active', 'manual', $4)
+       ON CONFLICT (pair_key, relationship_type)
+       DO UPDATE SET
+         status = 'active'`,
+      [pairKey, userAId, userBId, userId]
+    );
 
     const roomResult = await this.db.query<ChatRoomRow>(
       `INSERT INTO chat_rooms (pair_key, user_a_id, user_b_id)
@@ -169,7 +150,7 @@ export class ChatService {
     values.push(params.limit);
 
     const result = await this.db.query<ChatMessageRow>(
-      `SELECT id, room_id, sender_id, recipient_id, content, direction, ack_status, claw_message_id, created_at, delivered_at
+      `SELECT id, room_id, sender_id, recipient_id, content, direction, ack_status, created_at, delivered_at
        FROM messages
        ${whereClause}
        ORDER BY created_at DESC
@@ -183,32 +164,16 @@ export class ChatService {
   async sendMessage(params: { roomId: string; senderId: string; content: string }): Promise<ChatMessage> {
     const room = await this.assertRoomMembership(params.roomId, params.senderId);
     const recipientId = room.user_a_id === params.senderId ? room.user_b_id : room.user_a_id;
-    const recipientBot = await this.findActiveBotByUserId(recipientId);
 
     const insertResult = await this.db.query<ChatMessageRow>(
       `INSERT INTO messages (room_id, sender_id, recipient_id, content, direction, ack_status)
        VALUES ($1, $2, $3, $4, 'outbound', 'sent')
-       RETURNING id, room_id, sender_id, recipient_id, content, direction, ack_status, claw_message_id, created_at, delivered_at`,
+       RETURNING id, room_id, sender_id, recipient_id, content, direction, ack_status, created_at, delivered_at`,
       [params.roomId, params.senderId, recipientId, params.content]
     );
 
     const message = this.mapMessage(insertResult.rows[0]);
     await this.publishNewMessage(message, [params.senderId, recipientId]);
-
-    if (recipientBot) {
-      await this.ackMessageByRecipient(message.id, recipientId);
-      void this.forwardToClaw(message, recipientBot.bot_key).catch((error) => {
-        this.logger.error(
-          {
-            error,
-            messageId: message.id,
-            botKey: recipientBot.bot_key,
-            provider: this.clawBridge.getProviderName()
-          },
-          'Failed to forward bot-targeted outbound message to OpenClaw bridge'
-        );
-      });
-    }
 
     return message;
   }
@@ -225,7 +190,7 @@ export class ChatService {
        WHERE id = $1
          AND recipient_id = $2
          AND ack_status = 'sent'
-       RETURNING id, room_id, sender_id, recipient_id, content, direction, ack_status, claw_message_id, created_at, delivered_at, NOW() AS updated_at`,
+       RETURNING id, room_id, sender_id, recipient_id, content, direction, ack_status, created_at, delivered_at, NOW() AS updated_at`,
       [messageId, recipientId]
     );
 
@@ -259,58 +224,6 @@ export class ChatService {
     }
   }
 
-  private async forwardToClaw(message: ChatMessage, botKey?: string): Promise<void> {
-    const response = await this.clawBridge.forwardMessage({
-      messageId: message.id,
-      roomId: message.roomId,
-      senderId: message.senderId,
-      recipientId: message.recipientId,
-      botKey,
-      content: message.content
-    });
-
-    if (!response.replyText) {
-      return;
-    }
-
-    const inboundInsert = await this.db.query<ChatMessageRow>(
-      `INSERT INTO messages (room_id, sender_id, recipient_id, content, direction, ack_status, claw_message_id)
-       VALUES ($1, $2, $3, $4, 'inbound', 'sent', $5)
-       RETURNING id, room_id, sender_id, recipient_id, content, direction, ack_status, claw_message_id, created_at, delivered_at`,
-      [message.roomId, message.recipientId, message.senderId, response.replyText, response.providerMessageId ?? null]
-    );
-
-    const inbound = this.mapMessage(inboundInsert.rows[0]);
-    await this.publishNewMessage(inbound, [inbound.senderId, inbound.recipientId]);
-  }
-
-  private async findActiveBotByUserId(userId: string): Promise<BotUserRow | null> {
-    const result = await this.db.query<BotUserRow>(
-      `SELECT id, bot_key
-       FROM bots
-       WHERE user_id = $1
-         AND is_active = TRUE
-       LIMIT 1`,
-      [userId]
-    );
-
-    return result.rows[0] ?? null;
-  }
-
-  private async hasActiveBotParticipant(userAId: string, userBId: string): Promise<boolean> {
-    const result = await this.db.query<{ exists: boolean }>(
-      `SELECT EXISTS(
-        SELECT 1
-        FROM bots
-        WHERE is_active = TRUE
-          AND user_id IN ($1, $2)
-      )`,
-      [userAId, userBId]
-    );
-
-    return result.rows[0]?.exists ?? false;
-  }
-
   private async assertRoomMembership(roomId: string, userId: string): Promise<ChatRoomRow> {
     const result = await this.db.query<ChatRoomRow>(
       `SELECT id, pair_key, user_a_id, user_b_id, created_at
@@ -327,20 +240,17 @@ export class ChatService {
     }
 
     const peerUserId = row.user_a_id === userId ? row.user_b_id : row.user_a_id;
-    const hasBotParticipant = await this.hasActiveBotParticipant(userId, peerUserId);
-    if (!hasBotParticipant) {
-      const friendship = await this.db.query<{ exists: boolean }>(
-        `SELECT EXISTS(
-           SELECT 1
-           FROM friendships
-           WHERE user_id = $1
-             AND friend_user_id = $2
-         ) AS exists`,
-        [userId, peerUserId]
-      );
-      if (!(friendship.rows[0]?.exists ?? false)) {
-        throw new AppError(403, ErrorCodes.FORBIDDEN, 'This direct friendship is no longer active.');
-      }
+    const friendship = await this.db.query<{ exists: boolean }>(
+      `SELECT EXISTS(
+         SELECT 1
+         FROM friendships
+         WHERE user_id = $1
+           AND friend_user_id = $2
+       ) AS exists`,
+      [userId, peerUserId]
+    );
+    if (!(friendship.rows[0]?.exists ?? false)) {
+      throw new AppError(403, ErrorCodes.FORBIDDEN, 'This direct friendship is no longer active.');
     }
 
     return row;
@@ -365,8 +275,7 @@ export class ChatService {
       direction: row.direction,
       ackStatus: row.ack_status,
       createdAt: row.created_at.toISOString(),
-      ...(row.delivered_at ? { deliveredAt: row.delivered_at.toISOString() } : {}),
-      ...(row.claw_message_id ? { clawMessageId: row.claw_message_id } : {})
+      ...(row.delivered_at ? { deliveredAt: row.delivered_at.toISOString() } : {})
     };
   }
 

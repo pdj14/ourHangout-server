@@ -138,23 +138,7 @@ curl -s http://localhost:3000/v1/pairing/relationships \
   -H "Authorization: Bearer <ACCESS_TOKEN>"
 ```
 
-## 4) Bots (OurHangout in-app)
-
-### List available bots
-
-```bash
-curl -s http://localhost:3000/v1/bots \
-  -H "Authorization: Bearer <ACCESS_TOKEN>"
-```
-
-### Create/get bot room
-
-```bash
-curl -s -X POST http://localhost:3000/v1/bots/<BOT_ID>/rooms \
-  -H "Authorization: Bearer <ACCESS_TOKEN>"
-```
-
-## 5) Chat
+## 4) Chat
 
 ### Create/get direct room
 
@@ -389,93 +373,18 @@ WS social message send example:
 {"event":"message.send","data":{"roomId":"<ROOM_ID>","kind":"text","text":"hello","clientMessageId":"c_123"}}
 ```
 
-Group room bot trigger rule:
-
-- direct room: bot participant이면 항상 OpenClaw 브리지 전달
-- group room: `/bot`, `/claw`, `/<bot_key>` 명령 또는 `@bot` 멘션이 있을 때만 전달
-
 WS social read example:
 
 ```json
 {"event":"message.read","data":{"roomId":"<ROOM_ID>","lastReadMessageId":"<MESSAGE_ID>"}}
 ```
 
-## 7) OpenClaw test
-
-### Connector hub status
-
-```bash
-curl -s http://localhost:3000/v1/openclaw/connector/status \
-  -H "Authorization: Bearer <ACCESS_TOKEN>"
-```
-
-### Connector websocket connect (OpenClaw-side device)
-
-```bash
-npx wscat -c "ws://localhost:3000/v1/openclaw/connector/ws?token=<OPENCLAW_CONNECTOR_TOKEN>&connectorId=device-1&botKey=openclaw-assistant"
-```
-
-Connector request/response protocol:
-
-- server -> connector:
-```json
-{"event":"openclaw.request","data":{"requestId":"...","messageId":"...","roomId":"...","senderId":"...","recipientId":"...","botKey":"openclaw-assistant","content":"hello"}}
-```
-- connector -> server:
-```json
-{"event":"openclaw.response","data":{"requestId":"...","ok":true,"providerMessageId":"p_1","replyText":"hello from connector"}}
-```
-
-### Provider ping
-
-```bash
-curl -s http://localhost:3000/v1/openclaw/ping \
-  -H "Authorization: Bearer <ACCESS_TOKEN>"
-```
-
-### Test message through provider
-
-```bash
-curl -s -X POST http://localhost:3000/v1/openclaw/test-message \
-  -H "Authorization: Bearer <ACCESS_TOKEN>" \
-  -H "Content-Type: application/json" \
-  -d '{"content":"bridge test"}'
-```
-
-## 8) Minimal E2E scenario (connector mode, bot room)
-
-1. Set:
-```env
-OPENCLAW_MODE=connector
-OPENCLAW_CONNECTOR_TOKEN=<LONG_SECRET>
-```
-2. Start connector on OpenClaw device and connect to `/v1/openclaw/connector/ws`
-3. Check `GET /v1/openclaw/connector/status` -> activeConnectors > 0
-4. Login as user
-5. Call `GET /v1/bots` and select bot id
-6. Create/get room with `POST /v1/bots/:botId/rooms`
-7. User opens websocket
-8. User sends message in bot room
-9. Connector handles `openclaw.request` and sends `openclaw.response`
-10. User receives bot reply pushed via websocket
-
-## 9) HTTP provider failure check
-
-Set:
-
-```env
-OPENCLAW_MODE=http
-OPENCLAW_BASE_URL=http://127.0.0.1:18888
-```
-
-If endpoint unavailable, backend logs contain provider error with retry attempts and final upstream error code.
-
-## 10) Contact integration note
+## 7) Contact integration note
 
 Contact sync is implemented as app-side permission + hashed contact upload to backend.
 Current MVP supports both email-hash and phone-hash matching.
 
-## 11) Contacts (hashed)
+## 8) Contacts (hashed)
 
 ### Sync hashed contacts
 

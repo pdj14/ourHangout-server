@@ -84,12 +84,6 @@ if [[ ! -f ".env" ]]; then
   cp ".env.example" ".env"
 fi
 
-if grep -q '^OPENCLAW_MODE=' ".env"; then
-  sed -i 's/^OPENCLAW_MODE=.*/OPENCLAW_MODE=mock/' ".env"
-else
-  echo 'OPENCLAW_MODE=mock' >>".env"
-fi
-
 docker compose up -d --build
 docker compose exec -T api node dist/scripts/seed.js >/dev/null
 

@@ -91,7 +91,6 @@ cp .env.example .env
 - `POSTGRES_PASSWORD=<강한 비밀번호>`와 같은 값을 URI 인코딩한 `DATABASE_URL`
 - `PUBLIC_BASE_URL=https://<실제 API 도메인>`
 - `CORS_ORIGINS=<실제 앱 도메인/주소>`
-- `OPENCLAW_MODE` / `OPENCLAW_BASE_URL`
 - (ALB/프록시 뒤면) `TRUST_PROXY=true`
 
 ## 4.4 컨테이너 기동
@@ -136,16 +135,6 @@ npm run seed
 4. 장애 시 자동 복구가 필요함
 
 그때는 `docs/AWS_DEPLOY.md`의 확장 아키텍처(ALB + ECS/EC2 + RDS + ElastiCache)로 이동하면 됩니다.
-
-## 7) OpenClaw 관련 주의 (클라우드에서 가장 중요)
-
-AWS에서 로컬 네트워크 OpenClaw를 직접 호출하기 어렵습니다.
-장기적으로는 아래 중 하나가 필요합니다.
-
-1. VPN/Tailscale/WireGuard로 AWS와 디바이스 네트워크 연결
-2. (권장) OpenClaw 디바이스가 백엔드로 outbound 연결(WebSocket/MQTT)
-
----
 
 ## 참고 링크 (공식)
 

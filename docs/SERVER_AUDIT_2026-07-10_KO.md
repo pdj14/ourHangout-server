@@ -9,13 +9,22 @@
 - 배포 전 중복 데이터 검사, migration 잠금, 실패 복구 절차 추가
 - PostgreSQL 조회 및 중복 방지 인덱스 추가
 
-OpenClaw Connector와 Pobi 기능 변경은 이 보강 범위에 포함하지 않는다.
-
 ## 배포 전 확인
 
 마이그레이션 `020_security_and_query_indexes.sql`은 기존 관계 페어링 코드를 모두
 무효화하고 이후 코드 원문 대신 SHA-256 해시를 저장한다. 배포 후 진행 중이던 관계
 페어링은 새 코드를 발급해야 한다.
+
+마이그레이션 `021_remove_legacy_openclaw.sql`은 더 이상 제공하지 않는 레거시 봇
+기능을 제거한다. 다음 데이터가 영구 삭제되므로 배포 전 백업이 필요하다.
+
+- 레거시 봇이 참여한 `rooms` 및 해당 방의 메시지·설정·신고
+- 레거시 봇 사용자와 그 사용자의 구형 `chat_rooms` 및 메시지
+- `bots` 테이블과 `messages.claw_message_id` 컬럼
+
+일반 사용자끼리의 방과 메시지는 이 migration의 삭제 대상이 아니다. 과거 migration
+파일은 신규 DB 재현성과 기존 NAS의 migration 이력을 위해 유지하며, 최종 스키마는
+`021` 적용 후 레거시 봇 구조가 없는 상태가 된다.
 
 다음 중복 데이터가 있으면 배포 스크립트의 preflight 단계가 중단된다.
 

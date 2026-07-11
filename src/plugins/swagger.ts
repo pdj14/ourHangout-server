@@ -8,18 +8,16 @@ export const swaggerPlugin = fp(async (app) => {
       info: {
         title: 'Our Hangout Backend API',
         version: '0.1.0',
-        description: 'Backend API for Our Hangout app with OpenClaw bridge adapter.'
+        description: 'Backend API for the Our Hangout family communication app.'
       },
       tags: [
         { name: 'auth', description: 'Authentication and token lifecycle' },
         { name: 'contacts', description: 'Hashed contact sync and account match lookup' },
         { name: 'pairing', description: 'One-time device pairing codes' },
         { name: 'family', description: 'Friend-to-family upgrades, family links, groups, and permissions' },
-        { name: 'bots', description: 'In-app bot discovery and bot room bootstrap' },
         { name: 'chat', description: '1:1 rooms, messages, and ACK handling' },
         { name: 'social', description: 'Profiles, friends, rooms, media, reports, and push token APIs' },
         { name: 'app-updates', description: 'Published Android APK version checks and download endpoints' },
-        { name: 'openclaw', description: 'OpenClaw provider diagnostics and test routes' },
         { name: 'ops', description: 'Health, readiness, and metrics endpoints' }
       ]
     }

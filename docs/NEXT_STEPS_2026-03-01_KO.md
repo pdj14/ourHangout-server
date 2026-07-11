@@ -47,18 +47,13 @@ curl -s http://localhost:3000/ready
 1. 앱 연동 1차
    - 앱 API Base URL을 `http://<NAS_IP>:3000`으로 설정
    - 로그인/방목록/메시지 조회 호출 확인
-2. 인앱 봇 대화 검증
-   - `GET /v1/bots`
-   - `POST /v1/bots/:botId/rooms`
+2. 채팅 검증
    - `POST /v1/chats/rooms/:roomId/messages`
    - `GET /v1/chats/rooms/:roomId/messages`
-3. OpenClaw 실연동 준비
-   - 현재 `OPENCLAW_MODE=mock`
-   - 실제 장치 IP가 NAS에서 접근 가능할 때 `OPENCLAW_MODE=http` 전환
-4. 보안 정리
+3. 보안 정리
    - `JWT_SECRET` 강도 확인
    - `CORS_ORIGINS`를 실제 앱 도메인/주소로 제한
-5. 운영 안정화
+4. 운영 안정화
    - NAS 재부팅 후 자동 기동 확인
    - 주기 백업(볼륨 + `.env`) 정책 확정
 
@@ -72,16 +67,8 @@ curl -s -X POST http://localhost:3000/v1/auth/login \
   -d '{"email":"parent@ourhangout.local","password":"Parent123!"}'
 ```
 
-봇 목록:
-
-```bash
-curl -s http://localhost:3000/v1/bots \
-  -H "Authorization: Bearer <ACCESS_TOKEN>"
-```
-
 ## 6) 남은 TODO
 
 1. DSM 7.1에서는 현재 단일 compose 또는 `scripts/deploy-main.sh` 배포 경로 검증
 2. NAS 리버스 프록시 + HTTPS(443) 구성
 3. Google 로그인 운영 설정 (`GOOGLE_CLIENT_ID`) 적용
-4. OpenClaw `http` 모드 네트워크 경로 검증

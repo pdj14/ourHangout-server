@@ -7,7 +7,6 @@ import { env } from '../../config/env';
 import { AppError, ErrorCodes } from '../../lib/errors';
 import { FcmPushService } from '../../lib/push/fcm-push.service';
 import type { ConnectionManager } from '../chat/connection-manager';
-import type { ClawBridgeService } from '../openclaw/claw-bridge.service';
 import { GUARDIAN_CONSOLE_SUB } from '../guardian/guardian.auth';
 import type {
   FamilyRoomMemberProfileDto,
@@ -205,12 +204,6 @@ type ReportRow = {
   reporter_email: string;
 };
 
-type BotRecipientRow = {
-  user_id: string;
-  bot_key: string;
-  bot_name: string;
-};
-
 type PushRecipientRow = {
   user_id: string;
   platform: 'android' | 'ios' | 'web';
@@ -267,7 +260,6 @@ type FamilyRoomLocationRow = {
 type SocialServiceDeps = {
   db: Pool;
   connectionManager: ConnectionManager;
-  clawBridge: ClawBridgeService;
   pushService: FcmPushService;
   logger: FastifyBaseLogger;
 };
@@ -517,10 +509,6 @@ function normalizeMessagePreview(kind: MessageKind | null, text: string | null):
   return text ?? '';
 }
 
-function normalizeBotAlias(value: string): string {
-  return value.toLowerCase().replace(/[\s_-]+/g, '');
-}
-
 function getDirectKey(userIdA: string, userIdB: string): string {
   const [a, b] = [userIdA, userIdB].sort();
   return `${a}:${b}`;
@@ -570,14 +558,12 @@ function resolveMediaStoragePath(fileUrl: string): string {
 export class SocialService {
   private readonly db: Pool;
   private readonly connectionManager: ConnectionManager;
-  private readonly clawBridge: ClawBridgeService;
   private readonly pushService: FcmPushService;
   private readonly logger: FastifyBaseLogger;
 
   constructor(deps: SocialServiceDeps) {
     this.db = deps.db;
     this.connectionManager = deps.connectionManager;
-    this.clawBridge = deps.clawBridge;
     this.pushService = deps.pushService;
     this.logger = deps.logger;
   }
@@ -2176,9 +2162,8 @@ export class SocialService {
       throw new AppError(404, ErrorCodes.RESOURCE_NOT_FOUND, 'Target user not found.');
     }
 
-    const canOpen = await this.canOpenDirectRoom(userId, friendUserId);
-    if (!canOpen) {
-      throw new AppError(403, ErrorCodes.FORBIDDEN, 'Direct room can be opened only with friends (or active bot accounts).');
+    if (!(await this.isFriends(userId, friendUserId))) {
+      throw new AppError(403, ErrorCodes.FORBIDDEN, 'Direct room can be opened only with friends.');
     }
 
     const client = await this.db.connect();
@@ -3618,32 +3603,11 @@ export class SocialService {
       });
     }
 
-    const senderIsBot = await this.isActiveBotUser(params.userId);
-    if (!senderIsBot) {
-      await this.sendPushForRoomMessage({
-        room,
-        message: finalMessage,
-        targetUserIds: offlineRecipientIds
-      });
-
-      const recipientIds = memberUserIds.filter((memberId) => memberId !== params.userId);
-      if (recipientIds.length > 0) {
-        const bots = await this.findActiveBotsByUserIds(recipientIds);
-        for (const bot of bots) {
-          if (!this.shouldForwardToBot(room.type, finalMessage, bot)) {
-            continue;
-          }
-
-          void this.forwardToClawAndBroadcast({
-            room,
-            sourceMessage: finalMessage,
-            botUserId: bot.user_id,
-            botKey: bot.bot_key,
-            targetMembers: memberUserIds
-          });
-        }
-      }
-    }
+    await this.sendPushForRoomMessage({
+      room,
+      message: finalMessage,
+      targetUserIds: offlineRecipientIds
+    });
 
     return finalMessage;
   }
@@ -4020,174 +3984,6 @@ export class SocialService {
     return {
       removed: true
     };
-  }
-
-  private shouldForwardToBot(roomType: RoomType, message: RoomMessageDto, bot: BotRecipientRow): boolean {
-    if (roomType === 'direct') {
-      return true;
-    }
-
-    if (message.kind !== 'text' && message.kind !== 'system') {
-      return false;
-    }
-
-    const rawText = message.text?.trim();
-    if (!rawText || rawText.length === 0) {
-      return false;
-    }
-
-    const lower = rawText.toLowerCase();
-    const compact = lower.replace(/\s+/g, '');
-
-    const genericCommands = ['/bot', '/claw', '/ask'];
-    for (const cmd of genericCommands) {
-      if (lower === cmd || lower.startsWith(`${cmd} `)) {
-        return true;
-      }
-    }
-
-    const botCandidates = Array.from(
-      new Set([
-        bot.bot_key.toLowerCase(),
-        bot.bot_name.toLowerCase(),
-        normalizeBotAlias(bot.bot_key),
-        normalizeBotAlias(bot.bot_name)
-      ])
-    ).filter((candidate) => candidate.length > 0);
-
-    for (const candidate of botCandidates) {
-      if (lower === `/${candidate}` || lower.startsWith(`/${candidate} `)) {
-        return true;
-      }
-
-      if (lower.includes(`@${candidate}`) || compact.includes(`@${candidate}`)) {
-        return true;
-      }
-    }
-
-    return false;
-  }
-
-  private async forwardToClawAndBroadcast(params: {
-    room: RoomRow;
-    sourceMessage: RoomMessageDto;
-    botUserId: string;
-    botKey: string;
-    targetMembers: string[];
-  }): Promise<void> {
-    const sourceMessage = params.sourceMessage;
-
-    try {
-      const clawInputText =
-        sourceMessage.kind === 'text' || sourceMessage.kind === 'system'
-          ? sourceMessage.text ?? ''
-          : `${sourceMessage.kind}:${sourceMessage.uri ?? ''}`;
-
-      const response = await this.clawBridge.forwardMessage({
-        messageId: sourceMessage.id,
-        roomId: sourceMessage.roomId,
-        senderId: sourceMessage.senderId ?? 'system',
-        recipientId: params.botUserId,
-        botKey: params.botKey,
-        content: clawInputText
-      });
-
-      if (!response.replyText || response.replyText.trim().length === 0) {
-        return;
-      }
-
-      const insertResult = await this.db.query<RoomMessageRow>(
-        `INSERT INTO room_messages (room_id, sender_id, kind, text, media_url, delivery, created_at)
-         VALUES ($1, $2, 'text', $3, NULL, 'sent', NOW())
-         RETURNING id,
-                   room_id,
-                   sender_id,
-                   kind,
-                   text,
-                   media_url,
-                   delivery,
-                   created_at,
-                   NULL::text AS sender_name,
-                   NULL::text AS sender_email`,
-        [params.room.id, params.botUserId, response.replyText.trim()]
-      );
-
-      await this.db.query(
-        `UPDATE rooms
-         SET updated_at = NOW()
-         WHERE id = $1`,
-        [params.room.id]
-      );
-
-      const inserted = insertResult.rows[0];
-      const mapped = await this.fetchMessageById(inserted.id);
-      if (!mapped) {
-        return;
-      }
-
-      let delivered = false;
-      const offlineRecipientIds: string[] = [];
-      for (const memberId of params.targetMembers) {
-        const sent = this.connectionManager.sendToUser(memberId, {
-          event: 'message.new',
-          data: {
-            roomId: params.room.id,
-            message: mapped
-          }
-        });
-
-        if (memberId !== params.botUserId && sent) {
-          delivered = true;
-        }
-        if (memberId !== params.botUserId && !sent) {
-          offlineRecipientIds.push(memberId);
-        }
-      }
-
-      if (delivered && mapped.delivery === 'sent') {
-        await this.db.query(
-          `UPDATE room_messages
-           SET delivery = 'delivered'
-           WHERE id = $1
-             AND delivery = 'sent'`,
-          [mapped.id]
-        );
-
-        this.emitToUsers(params.targetMembers, {
-          event: 'message.delivery',
-          data: {
-            roomId: mapped.roomId,
-            messageId: mapped.id,
-            delivery: 'delivered',
-            at: new Date().toISOString()
-          }
-        });
-      }
-
-      await this.sendPushForRoomMessage({
-        room: params.room,
-        message: mapped,
-        targetUserIds: offlineRecipientIds
-      });
-
-      this.emitToUsers(params.targetMembers, {
-        event: 'room.updated',
-        data: {
-          roomId: params.room.id
-        }
-      });
-    } catch (error) {
-      this.logger.error(
-        {
-          error,
-          provider: this.clawBridge.getProviderName(),
-          roomId: params.room.id,
-          botUserId: params.botUserId,
-          sourceMessageId: sourceMessage.id
-        },
-        'Failed to forward message to OpenClaw in social room pipeline'
-      );
-    }
   }
 
   private async fetchMessageById(messageId: string): Promise<RoomMessageDto | null> {
@@ -5001,48 +4797,6 @@ export class SocialService {
     );
 
     return result.rows[0]?.exists ?? false;
-  }
-
-  private async isActiveBotUser(userId: string): Promise<boolean> {
-    const result = await this.db.query<{ exists: boolean }>(
-      `SELECT EXISTS(
-        SELECT 1
-        FROM bots
-        WHERE user_id = $1
-          AND is_active = TRUE
-      )`,
-      [userId]
-    );
-
-    return result.rows[0]?.exists ?? false;
-  }
-
-  private async findActiveBotsByUserIds(userIds: string[]): Promise<BotRecipientRow[]> {
-    if (userIds.length === 0) {
-      return [];
-    }
-
-    const result = await this.db.query<BotRecipientRow>(
-      `SELECT user_id, bot_key, name AS bot_name
-       FROM bots
-       WHERE is_active = TRUE
-         AND user_id = ANY($1::uuid[])`,
-      [userIds]
-    );
-
-    return result.rows;
-  }
-
-  private async canOpenDirectRoom(userId: string, targetUserId: string): Promise<boolean> {
-    if (await this.isFriends(userId, targetUserId)) {
-      return true;
-    }
-
-    if (await this.isActiveBotUser(targetUserId)) {
-      return true;
-    }
-
-    return false;
   }
 
   private async createSharedRoom(

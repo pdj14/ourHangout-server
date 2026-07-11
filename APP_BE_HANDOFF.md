@@ -7,9 +7,7 @@
 - 백엔드 서버는 Synology NAS에서 Docker Compose로 구동 중입니다.
 - 외부 접근 확인 완료:
   - `GET http://wowjini0228.synology.me:7083/health` -> `{"success":true,...}`
-- 아키텍처:
-  - App <-> Backend
-  - Backend <-> OpenClaw Provider (`mock` | `http` | `connector`)
+- 아키텍처: App <-> Backend
 
 ## 2) 앱에서 사용할 Base URL
 
@@ -70,42 +68,23 @@
   - `room.join`
   - `room.leave`
 
-## 6) Bot/OpenClaw 연계 상태
-
-- Bot 기능:
-  - `GET /v1/bots`
-  - `POST /v1/bots/:botId/rooms` (봇과 1:1 방 생성/조회)
-- OpenClaw 모드:
-  - `OPENCLAW_MODE=mock` (기본 검증용)
-  - `OPENCLAW_MODE=http`
-  - `OPENCLAW_MODE=connector` (Telegram 유사 허브/커넥터 모델)
-- Connector 허브 WS:
-  - `GET /v1/openclaw/connector/ws`
-  - 상태 확인: `GET /v1/openclaw/connector/status`
-- 그룹방 라우팅 규칙:
-  - 일반 메시지는 봇으로 자동 전달하지 않음
-  - `/bot`, `/claw`, `@bot` 멘션 등 명시 트리거 시에만 전달
-
-## 7) 앱 연동 1차 권장 순서
+## 6) 앱 연동 1차 권장 순서
 
 1. Base URL 설정 및 `GET /health`, `GET /ready` 확인
 2. 이메일 로그인(`POST /v1/auth/login`) + 토큰 저장
 3. 방 목록(`GET /v1/rooms`) + 메시지 조회(`GET /v1/rooms/:roomId/messages`)
 4. 메시지 전송(`POST /v1/rooms/:roomId/messages`) 확인
 5. WebSocket 연결 후 실시간 이벤트 수신 확인
-6. Bot 목록/봇방 생성 후 봇 대화 플로우 검증
-7. Google 로그인 SDK 연동 후 `POST /v1/auth/google` 연결
+6. Google 로그인 SDK 연동 후 `POST /v1/auth/google` 연결
 
-## 8) 현재 가정/TODO (앱팀 공유 필요)
+## 7) 현재 가정/TODO (앱팀 공유 필요)
 
 - 미디어 업로드 URL은 현재 `mock-storage.local` 기반 목업 URL 발급 구조입니다.
 - 푸시 알림은 토큰 등록 API까지 구현되어 있으며, 실제 FCM 발송 워커는 후속 작업입니다.
 - 외부 URL은 현재 HTTP로 동작 중이며, 운영 단계에서는 HTTPS 전환이 필요합니다.
-- OpenClaw 실연동은 `connector` 모드 기준 커넥터 프로세스 연결이 필요합니다.
 
-## 9) 참고 문서
+## 8) 참고 문서
 
 - API 상세: `API_COLLECTION.md`
 - 아키텍처: `ARCHITECTURE.md`
-- OpenClaw Connector 프로토콜: `docs/OPENCLAW_CONNECTOR_PROTOCOL.md`
 - 백엔드 필수 리스트: `CHAT_BACKEND_REQUIRED_LIST.md`

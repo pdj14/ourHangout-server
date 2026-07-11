@@ -10,7 +10,6 @@
     "migrate": "tsx src/scripts/migrate.ts",
     "migration:preflight": "tsx src/scripts/migrationPreflight.ts",
     "seed": "tsx src/scripts/seed.ts",
-    "connector:dev": "tsx src/scripts/openclawConnectorClient.ts",
     "test": "tsx --test test/*.test.ts",
     "check": "tsc --noEmit && tsc -p tsconfig.test.json --noEmit"
   },

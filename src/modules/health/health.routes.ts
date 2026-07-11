@@ -1,5 +1,4 @@
 ﻿import type { FastifyInstance } from 'fastify';
-import { env } from '../../config/env';
 
 export async function healthRoutes(app: FastifyInstance): Promise<void> {
   app.get(
@@ -34,8 +33,7 @@ export async function healthRoutes(app: FastifyInstance): Promise<void> {
     async (_request, reply) => {
       const checks = {
         postgres: false,
-        redis: false,
-        openclaw: false
+        redis: false
       };
 
       await Promise.all([
@@ -46,15 +44,10 @@ export async function healthRoutes(app: FastifyInstance): Promise<void> {
         app.redis.ping().then(
           (response) => { checks.redis = response === 'PONG'; },
           () => { checks.redis = false; }
-        ),
-        app.clawBridge.ping().then(
-          (result) => { checks.openclaw = result.ok; },
-          () => { checks.openclaw = false; }
         )
       ]);
 
-      const openClawRequired = env.OPENCLAW_MODE !== 'mock';
-      const ready = checks.postgres && checks.redis && (!openClawRequired || checks.openclaw);
+      const ready = checks.postgres && checks.redis;
 
       if (!ready) {
         reply.code(503);

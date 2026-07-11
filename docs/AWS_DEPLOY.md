@@ -39,8 +39,6 @@ This reduces common cloud issues around client IP handling, multi-instance throt
 - `JWT_SECRET=<strong random>`
 - `CORS_ORIGINS=https://<app-domain>`
 - `RATE_LIMIT_REDIS_NAMESPACE=ourhangout-rate-limit-`
-- `OPENCLAW_MODE=mock|http`
-- `OPENCLAW_BASE_URL=<reachable endpoint from AWS>`
 
 ## 5) Migration strategy in AWS
 
@@ -52,17 +50,7 @@ Use one of:
 
 After migration success, deploy API tasks.
 
-## 6) OpenClaw connectivity warning
-
-If OpenClaw lives in home/local network, AWS cannot usually call it directly.
-
-Choose one:
-1. Private network bridge (VPN/Tailscale/WireGuard) between AWS and device network
-2. Device-outbound model (recommended): OpenClaw device opens secure outbound WebSocket/MQTT to backend
-
-For long-term cloud operations, #2 is typically more stable than inbound access to home devices.
-
-## 7) Cutover sequence
+## 6) Cutover sequence
 
 1. Deploy `staging` stack on AWS.
 2. Run migrations once.
@@ -71,7 +59,7 @@ For long-term cloud operations, #2 is typically more stable than inbound access 
 5. Observe logs/metrics for at least 24h.
 6. Roll out production and switch DNS.
 
-## 8) Post-cutover hardening
+## 7) Post-cutover hardening
 
 1. Add WAF rules on ALB.
 2. Add CI/CD gate running `npm run check`, build, and E2E.

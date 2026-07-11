@@ -6,12 +6,7 @@
   - REST API (Fastify routes)
   - WebSocket endpoint (`/v1/ws`)
 - **Application Layer**
-  - `AuthService`, `PairingService`, `ContactsService`, `BotService`, `ChatService`, `SocialService`, `ClawBridgeService`
-- **Adapter Layer**
-  - `ClawProvider` interface
-  - `ConnectorClawProvider` (server hub + bot connector)
-  - `MockClawProvider`
-  - `HttpClawProvider`
+  - `AuthService`, `PairingService`, `ContactsService`, `ChatService`, `SocialService`, `FamilyService`, `GuardianService`
 - **Infrastructure Layer**
   - PostgreSQL (`pg`)
   - Redis pub/sub (`ioredis`)
@@ -43,7 +38,6 @@ Phone-hash match is also supported when target users set `phone_e164`.
 3. Backend publishes Redis event
 4. Subscribed backend instance pushes to recipient socket
 5. On socket delivery success, backend updates ACK to `delivered`
-6. If room peer is an in-app bot user, backend forwards message to OpenClaw bridge
 
 ### B-2. Social room send
 
@@ -51,24 +45,6 @@ Phone-hash match is also supported when target users set `phone_e164`.
 2. Backend persists `room_messages` and updates `rooms.updated_at`
 3. Backend pushes `message.new` to active sockets
 4. Backend updates delivery to `delivered`/`read` on websocket delivery + read API
-5. If active bot account participates in room, backend routes message to OpenClaw bridge and persists reply
-
-### C. OpenClaw bridge route
-
-1. User calls `GET /v1/bots` and `POST /v1/bots/:botId/rooms`
-2. Bot room is backed by a dedicated bot user account (`bots.user_id`)
-3. User message in bot room is persisted, ACKed, then bridged via `ClawBridgeService.forwardMessage(...)`
-4. Selected provider (`connector`, `mock`, or `http`) handles transport
-5. Provider response (if `replyText`) is persisted as inbound bot message
-6. Backend publishes/pushes inbound event via Redis + WebSocket
-
-### C-2. Connector hub flow (Telegram-like)
-
-1. OpenClaw-side connector opens WS to `GET /v1/openclaw/connector/ws`
-2. Connector authenticates with shared token (`OPENCLAW_CONNECTOR_TOKEN`) and declares supported bot keys
-3. Backend hub routes bot-targeted message as `openclaw.request` to connector
-4. Connector calls local OpenClaw engine and replies with `openclaw.response`
-5. Backend resolves request and writes bot response to room
 
 ## 3) Security points
 
@@ -118,7 +94,6 @@ Future extensions:
 - `media_assets`
 - `reports`
 - `device_tokens`
-- `bots`
 - `contact_hashes`
 - `schema_migrations`
 
@@ -160,6 +135,4 @@ Main codes:
 - `RESOURCE_NOT_FOUND`
 - `CONFLICT`
 - `RATE_LIMITED`
-- `OPENCLAW_TIMEOUT`
-- `OPENCLAW_UPSTREAM_ERROR`
 - `INTERNAL_ERROR`
