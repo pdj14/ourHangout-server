@@ -86,7 +86,11 @@ require_command curl
 [ ! -e "$BACKUP_DIR" ] || fail "Backup path already exists: $BACKUP_DIR"
 
 if git -C "$TARGET_DIR" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
-  log "Target is already a Git worktree; running the normal main deployment."
+  log "Target is already a Git worktree; updating deployment scripts first."
+  git -C "$TARGET_DIR" fetch origin "$BRANCH"
+  git -C "$TARGET_DIR" checkout "$BRANCH"
+  git -C "$TARGET_DIR" pull --ff-only origin "$BRANCH"
+  log "Running the normal main deployment."
   cd "$TARGET_DIR"
   sh scripts/deploy-main.sh
   docker rm -f "$MIGRATE_CONTAINER" >/dev/null 2>&1 || true

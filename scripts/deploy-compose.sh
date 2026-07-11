@@ -36,16 +36,49 @@ compose() {
   fail "docker compose or docker-compose is required."
 }
 
-ensure_branch() {
-  git fetch origin "$BRANCH_NAME"
-
-  if git show-ref --verify --quiet "refs/heads/$BRANCH_NAME"; then
-    git checkout "$BRANCH_NAME"
-  else
-    git checkout -b "$BRANCH_NAME" "origin/$BRANCH_NAME"
+resolve_git() {
+  if [ -n "${GIT_BIN:-}" ]; then
+    if [ -x "$GIT_BIN" ]; then
+      return
+    fi
+    fail "Configured GIT_BIN is not executable: $GIT_BIN"
   fi
 
-  git pull --ff-only origin "$BRANCH_NAME"
+  if command -v git >/dev/null 2>&1; then
+    GIT_BIN=$(command -v git)
+    return
+  fi
+
+  for candidate in /usr/local/bin/git /opt/bin/git /bin/git /usr/bin/git; do
+    if [ -x "$candidate" ]; then
+      GIT_BIN="$candidate"
+      return
+    fi
+  done
+
+  fail "git is required but was not found in PATH. Install git or rerun with GIT_BIN=/absolute/path/to/git."
+}
+
+git_cmd() {
+  "$GIT_BIN" "$@"
+}
+
+ensure_git_worktree() {
+  if ! git_cmd rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+    fail "Current directory is not a git worktree. Run scripts/bootstrap-main-git-deploy.sh for an uploaded NAS folder."
+  fi
+}
+
+ensure_branch() {
+  git_cmd fetch origin "$BRANCH_NAME"
+
+  if git_cmd show-ref --verify --quiet "refs/heads/$BRANCH_NAME"; then
+    git_cmd checkout "$BRANCH_NAME"
+  else
+    git_cmd checkout -b "$BRANCH_NAME" "origin/$BRANCH_NAME"
+  fi
+
+  git_cmd pull --ff-only origin "$BRANCH_NAME"
 }
 
 ensure_clean_worktree() {
@@ -71,11 +104,23 @@ fi
 
 cd "$REPO_DIR"
 
+resolve_git
+ensure_git_worktree
+
+INITIAL_HEAD=$(git_cmd rev-parse HEAD)
+
+log "Using git: $GIT_BIN"
 log "Checking git worktree."
 ensure_clean_worktree
 
 log "Switching to branch $BRANCH_NAME and pulling latest code."
 ensure_branch
+
+UPDATED_HEAD=$(git_cmd rev-parse HEAD)
+if [ "$INITIAL_HEAD" != "$UPDATED_HEAD" ]; then
+  log "Repository updated from $INITIAL_HEAD to $UPDATED_HEAD; restarting with the latest deployment script."
+  exec sh "$REPO_DIR/scripts/deploy-compose.sh" "$ENV_NAME" "$BRANCH_NAME" "$COMPOSE_FILE_NAME"
+fi
 
 log "Ensuring bind-mount directories exist."
 mkdir -p "$REPO_DIR/logs" "$REPO_DIR/storage/media" "$REPO_DIR/storage/app-updates"
