@@ -99,6 +99,7 @@ type RoomListRow = {
   favorite: boolean | null;
   muted: boolean | null;
   unread_count: number;
+  first_unread_message_id: string | null;
   preview_kind: MessageKind | null;
   preview_text: string | null;
   preview_media_url: string | null;
@@ -2097,6 +2098,22 @@ export class SocialService {
                     )
                   )
               ) AS unread_count,
+              (
+                SELECT rm.id
+                FROM room_messages rm
+                WHERE rm.room_id = r.id
+                  AND rm.kind <> 'system'
+                  AND rm.sender_id IS DISTINCT FROM $1
+                  AND (
+                    (lrm.order_seq IS NOT NULL AND rm.order_seq > lrm.order_seq)
+                    OR (
+                      lrm.order_seq IS NULL
+                      AND rm.created_at > COALESCE(rus.last_read_at, to_timestamp(0))
+                    )
+                  )
+                ORDER BY rm.order_seq ASC
+                LIMIT 1
+              ) AS first_unread_message_id,
               lm.kind AS preview_kind,
               lm.text AS preview_text,
               lm.media_url AS preview_media_url
@@ -4087,6 +4104,22 @@ export class SocialService {
                     )
                   )
               ) AS unread_count,
+              (
+                SELECT rm.id
+                FROM room_messages rm
+                WHERE rm.room_id = r.id
+                  AND rm.kind <> 'system'
+                  AND rm.sender_id IS DISTINCT FROM $1
+                  AND (
+                    (lrm.order_seq IS NOT NULL AND rm.order_seq > lrm.order_seq)
+                    OR (
+                      lrm.order_seq IS NULL
+                      AND rm.created_at > COALESCE(rus.last_read_at, to_timestamp(0))
+                    )
+                  )
+                ORDER BY rm.order_seq ASC
+                LIMIT 1
+              ) AS first_unread_message_id,
               lm.kind AS preview_kind,
               lm.text AS preview_text,
               lm.media_url AS preview_media_url
@@ -4151,6 +4184,7 @@ export class SocialService {
       favorite: row.favorite ?? false,
       muted: row.muted ?? false,
       unread: Number(row.unread_count) || 0,
+      ...(row.first_unread_message_id ? { firstUnreadMessageId: row.first_unread_message_id } : {}),
       ...(preview ? { preview } : {}),
       updatedAt: row.updated_at.toISOString()
     };

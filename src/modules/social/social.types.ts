@@ -40,6 +40,7 @@ export interface RoomDto {
   favorite: boolean;
   muted: boolean;
   unread: number;
+  firstUnreadMessageId?: string;
   preview?: string;
   updatedAt: string;
 }
