@@ -156,6 +156,28 @@ type RoomRelationshipRow = {
   created_at: Date;
 };
 
+type GuardianLogMessage = {
+  id: string;
+  role: 'user' | 'assistant';
+  content: string;
+  createdAt: number;
+};
+
+type GuardianLogRow = {
+  id: string;
+  child_user_id: string;
+  room_id: string;
+  relationship_id: string;
+  client_log_id: string;
+  title: string;
+  message_count: number;
+  messages: GuardianLogMessage[];
+  synced_at: Date;
+  created_at: Date;
+  updated_at: Date;
+  guardian_user_id: string;
+};
+
 type DirectRoomPeerTitleRow = {
   room_id: string;
   peer_name: string;
@@ -5143,5 +5165,112 @@ export class SocialService {
     for (const userId of unique) {
       this.connectionManager.sendToUser(userId, payload);
     }
+  }
+
+  async syncGuardianConversationLog(params: {
+    userId: string;
+    roomId: string;
+    clientLogId: string;
+    title: string;
+    messages: GuardianLogMessage[];
+  }): Promise<{ syncedAt: string }> {
+    const childUserId = params.userId;
+    const relationship = await this.db.query<{ id: string; guardian_user_id: string }>(
+      `SELECT rr.id, rr.guardian_user_id
+       FROM room_relationships rr
+       INNER JOIN room_members rm ON rm.room_id = rr.room_id AND rm.user_id = $1 AND rm.left_at IS NULL
+       WHERE rr.room_id = $2
+         AND rr.child_user_id = $1
+         AND rr.relationship_type = 'guardian_child'
+         AND rr.status = 'active'
+       LIMIT 1`,
+      [childUserId, params.roomId]
+    );
+    const row = relationship.rows[0];
+    if (!row) {
+      throw new AppError(403, ErrorCodes.FORBIDDEN, 'Active guardian-child relationship is required to sync guardian logs.');
+    }
+
+    const messages = params.messages.slice(-60);
+    const title = (params.title || '').trim().slice(0, 120);
+    const result = await this.db.query<{ id: string; updated_at: Date }>(
+      `INSERT INTO guardian_conversation_logs (
+         child_user_id, room_id, relationship_id, client_log_id, title, message_count, messages
+       )
+       VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb)
+       ON CONFLICT (child_user_id, client_log_id)
+       DO UPDATE SET
+         title = EXCLUDED.title,
+         message_count = EXCLUDED.message_count,
+         messages = EXCLUDED.messages,
+         synced_at = NOW(),
+         updated_at = NOW()
+       RETURNING id, updated_at`,
+      [
+        childUserId,
+        params.roomId,
+        row.id,
+        params.clientLogId,
+        title,
+        messages.length,
+        JSON.stringify(messages)
+      ]
+    );
+
+    return { syncedAt: result.rows[0].updated_at.toISOString() };
+  }
+
+  async listGuardianConversationLogsForGuardian(params: {
+    userId: string;
+    childUserId: string;
+    limit?: number;
+  }): Promise<{
+    items: Array<{
+      id: string;
+      childUserId: string;
+      roomId: string;
+      title: string;
+      messageCount: number;
+      messages: GuardianLogMessage[];
+      syncedAt: string;
+      updatedAt: string;
+    }>;
+  }> {
+    const limit = Math.min(Math.max(params.limit ?? 30, 1), 100);
+    const result = await this.db.query<GuardianLogRow>(
+      `SELECT g.id,
+              g.child_user_id,
+              g.room_id,
+              g.relationship_id,
+              g.client_log_id,
+              g.title,
+              g.message_count,
+              g.messages,
+              g.synced_at,
+              g.created_at,
+              g.updated_at,
+              rr.guardian_user_id
+       FROM guardian_conversation_logs g
+       INNER JOIN room_relationships rr ON rr.id = g.relationship_id
+       WHERE g.child_user_id = $1
+         AND rr.guardian_user_id = $2
+         AND rr.status = 'active'
+       ORDER BY g.updated_at DESC
+       LIMIT $3`,
+      [params.childUserId, params.userId, limit]
+    );
+
+    return {
+      items: result.rows.map((row) => ({
+        id: row.id,
+        childUserId: row.child_user_id,
+        roomId: row.room_id,
+        title: row.title || '지키미 대화',
+        messageCount: row.message_count,
+        messages: Array.isArray(row.messages) ? row.messages : [],
+        syncedAt: row.synced_at.toISOString(),
+        updatedAt: row.updated_at.toISOString()
+      }))
+    };
   }
 }

@@ -976,6 +976,90 @@ export async function socialRoutes(app: FastifyInstance): Promise<void> {
   );
 
   app.post(
+    '/guardian-logs/sync',
+    {
+      preHandler: app.authenticate,
+      schema: {
+        tags: ['social'],
+        summary: 'Sync a guardian conversation log from the child device',
+        body: {
+          type: 'object',
+          required: ['roomId', 'clientLogId', 'messages'],
+          properties: {
+            roomId: { type: 'string', format: 'uuid' },
+            clientLogId: { type: 'string', minLength: 1, maxLength: 128 },
+            title: { type: 'string', maxLength: 120 },
+            messages: {
+              type: 'array',
+              maxItems: 60,
+              items: {
+                type: 'object',
+                required: ['id', 'role', 'content', 'createdAt'],
+                properties: {
+                  id: { type: 'string' },
+                  role: { type: 'string', enum: ['user', 'assistant'] },
+                  content: { type: 'string' },
+                  createdAt: { type: 'number' }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    async (request) => {
+      const body = request.body as {
+        roomId: string;
+        clientLogId: string;
+        title?: string;
+        messages: Array<{ id: string; role: 'user' | 'assistant'; content: string; createdAt: number }>;
+      };
+      const data = await app.socialService.syncGuardianConversationLog({
+        userId: request.user.sub,
+        roomId: body.roomId,
+        clientLogId: body.clientLogId,
+        title: body.title || '',
+        messages: body.messages
+      });
+      return { success: true, data };
+    }
+  );
+
+  app.get(
+    '/guardian-logs/:childUserId',
+    {
+      preHandler: app.authenticate,
+      schema: {
+        tags: ['social'],
+        summary: 'List synced guardian conversation logs for a linked child',
+        params: {
+          type: 'object',
+          required: ['childUserId'],
+          properties: {
+            childUserId: { type: 'string', format: 'uuid' }
+          }
+        },
+        querystring: {
+          type: 'object',
+          properties: {
+            limit: { type: 'number', minimum: 1, maximum: 100 }
+          }
+        }
+      }
+    },
+    async (request) => {
+      const params = request.params as { childUserId: string };
+      const query = (request.query as { limit?: number } | undefined) ?? {};
+      const data = await app.socialService.listGuardianConversationLogsForGuardian({
+        userId: request.user.sub,
+        childUserId: params.childUserId,
+        limit: query.limit
+      });
+      return { success: true, data };
+    }
+  );
+
+  app.post(
     '/rooms/:roomId/leave',
     {
       preHandler: app.authenticate,
