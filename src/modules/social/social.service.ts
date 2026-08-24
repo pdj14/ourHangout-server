@@ -5217,6 +5217,18 @@ export class SocialService {
       ]
     );
 
+    await this.db.query(
+      `DELETE FROM guardian_conversation_logs
+       WHERE id IN (
+         SELECT id
+         FROM guardian_conversation_logs
+         WHERE child_user_id = $1
+         ORDER BY updated_at DESC
+         OFFSET 30
+       )`,
+      [childUserId]
+    );
+
     return { syncedAt: result.rows[0].updated_at.toISOString() };
   }
 
